@@ -101,7 +101,9 @@ export class MathEditor {
       }
     };
     let timer = null;
-    area.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(show, 90); });
+    // At most every 90ms while typing, so a fast typist still sees the preview keep up
+    // (waiting for a pause meant it stayed blank until they stopped).
+    area.addEventListener('input', () => { if (!timer) timer = setTimeout(() => { timer = null; show(); }, 90); });
     area.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.cancel(); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.finish(); }
