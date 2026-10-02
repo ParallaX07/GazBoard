@@ -88,6 +88,7 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item(t('Sticky note here'), 'note', () => app.addNoteAt(wp)));
     menu.appendChild(item(t('Text here'), 'text', () => app.addTextAt(wp)));
     menu.appendChild(item(t('Insert image…'), 'image', () => app.command('insert.image')));
+    menu.appendChild(item(t('Insert maths'), 'maths', () => app.command('insert.math')));
     menu.appendChild(item(t('Insert document…'), 'doc', () => app.command('insert.document')));
     menu.appendChild(h('div', { class: 'menu-sep' }));
     menu.appendChild(item(t('Templates…'), 'template', () => app.panels.templates()));
@@ -151,7 +152,7 @@ export function updateSelectionBar(app) {
   };
 
   // colour control, only for the things that actually have a colour
-  const COLOURABLE = new Set(['stroke', 'shape', 'note', 'text', 'table']);
+  const COLOURABLE = new Set(['stroke', 'shape', 'note', 'text', 'table', 'math']);
   if (types.size === 1 && COLOURABLE.has([...types][0])) {
     const type = [...types][0];
     const swatch = h('button', { class: 'colour-btn', title: t('Colour') });
@@ -167,6 +168,8 @@ export function updateSelectionBar(app) {
 
   if ([...types].every((t) => ['note', 'text', 'shape', 'table'].includes(t)) && sel.length === 1)
     bar.appendChild(mk(t('Edit text (F2)'), 'text', () => app.beginTextEdit(sel[0])));
+  if (sel.length === 1 && sel[0].type === 'math')
+    bar.appendChild(mk(t('Edit maths (F2)'), 'maths', () => app.beginMathEdit(sel[0])));
 
   // a table gets its own row and column controls
   if (sel.length === 1 && sel[0].type === 'table') {
@@ -234,7 +237,7 @@ function placeBar(bar, box) {
 }
 
 function openColorPopover(app, anchor, type, sel) {
-  const colors = type === 'note' ? NOTE_COLORS : type === 'text' ? TEXT_COLORS : type === 'shape' ? SHAPE_STROKES : PEN_COLORS;
+  const colors = type === 'note' ? NOTE_COLORS : (type === 'text' || type === 'math') ? TEXT_COLORS : type === 'shape' ? SHAPE_STROKES : PEN_COLORS;
   const grid = h('div', { class: 'swatches' });
   for (const c of colors) {
     const b = h('button', { class: 'sw', title: c });

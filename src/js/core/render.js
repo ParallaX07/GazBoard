@@ -5,6 +5,7 @@ import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
 import { objectRuns, layoutRich, fitRichSize, drawRichLines } from './richtext.js';
+import { mathEntry, hasMaths } from './maths.js';
 
 import { fontStack } from '../ui/palettes.js';
 import { t } from '../i18n.js';
@@ -466,9 +467,10 @@ export function drawShape(ctx, o, hideText = false) {
   }
   if (o.text && !hideText) {
     const pad = 10;
+    const papered = !!o.fill && o.fill !== 'none';
     drawTextBlock(ctx, o.text, x + pad, y + pad, w - pad * 2, h - pad * 2, {
-      runs: objectRuns(o), paint: (c) => inkPaint(c),
-      color: inkPaint(o.textColor), size: o.fontSize || 0, align: 'center', valign: 'middle',
+      runs: objectRuns(o), paint: papered ? (c) => c || '#201f1e' : (c) => inkPaint(c), ownInk: papered,
+      color: papered ? (o.textColor || '#201f1e') : inkPaint(o.textColor), size: o.fontSize || 0, align: 'center', valign: 'middle',
       family: faceOf(o.font), weight: o.bold ? '600' : '400', italic: o.italic
     });
   }
@@ -487,11 +489,15 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
    * text - every board made before rich text, and every box nobody has
    * formatted - takes exactly the path below that it always has.
    */
-  if (opt.runs) {
-    const base = { family, weight: '400', bold: weight === '600', italic: !!opt.italic, underline: !!opt.underline, color: opt.color, size: opt.size };
-    if (!base.size) base.size = fitRichSize(ctx, opt.runs, w, h, base, opt.maxSize || 72, opt.minSize || 10);
-    const lines = layoutRich(ctx, opt.runs, w, base);
-    drawRichLines(ctx, lines, x, y, w, h, base, { align: opt.align, valign: opt.valign, lineHeight: opt.lineHeight, paint: opt.paint });
+  // Maths in the words ($...$) is drawn by the rich path too, which knows how to set it.
+  const runs = opt.runs || (hasMaths(text) ? [{ t: text }] : null);
+  if (runs) {
+    const base = { family, weight: '400', bold: weight === '600', italic: !!opt.italic, underline: !!opt.underline, color: opt.color, size: opt.size,
+      onload: opt.onload, lineHeight: opt.lineHeight };
+    if (!base.size) base.size = fitRichSize(ctx, runs, w, h, base, opt.maxSize || 72, opt.minSize || 10);
+    const lines = layoutRich(ctx, runs, w, base);
+    drawRichLines(ctx, lines, x, y, w, h, base, { align: opt.align, valign: opt.valign, lineHeight: opt.lineHeight, // plain words with maths in them keep the colours the plain path gives them
+      paint: opt.paint || (opt.runs || opt.ownInk ? undefined : (c) => inkPaint(c)), onload: opt.onload });
     return;
   }
   const italic = opt.italic ? 'italic ' : '';
@@ -499,7 +505,9 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
   if (!size) size = fitFontSize(ctx, text, w, h, family, weight, opt.maxSize || 72, opt.minSize || 10);
   ctx.save();
   ctx.font = `${italic}${weight} ${size}px ${family}`;
-  ctx.fillStyle = inkPaint(opt.color);
+  // Words on a paper of their own (a sticky note, a table, a filled shape) keep
+  // their ink in the dark theme: light letters on a yellow note cannot be read.
+  ctx.fillStyle = opt.ownInk ? (opt.color || '#201f1e') : inkPaint(opt.color);
   ctx.textBaseline = 'top';
   const lines = wrapText(ctx, text, w);
   const lh = size * (opt.lineHeight || 1.28);
@@ -571,7 +579,7 @@ export function drawNote(ctx, o, hideText = false) {
   const type = noteTypeRange(o);
   drawTextBlock(ctx, hideText ? '' : o.text, o.x + pad, o.y + pad, o.w - pad * 2, o.h - pad * 2, {
     runs: objectRuns(o),
-    color: o.textColor || readableText(o.color || '#ffd94a'),
+    color: o.textColor || readableText(o.color || '#ffd94a'), ownInk: true,
     size: o.fontSize || 0, maxSize: type.max, minSize: type.min,
     align: o.align || 'center', valign: 'middle',
     family: faceOf(o.font),
@@ -716,6 +724,37 @@ export function drawEmoji(ctx, o) {
   ctx.restore();
 }
 
+/**
+ * A maths box: its formula as a picture, as large as fits the box and centred
+ * in it. Until the picture is ready (the first time a board with maths opens)
+ * the LaTeX itself stands in, faintly, so nothing jumps about unexplained.
+ */
+export function drawMath(ctx, o, onload) {
+  const aw = Math.abs(o.w), ah = Math.abs(o.h);
+  if (aw < 1 || ah < 1) return;
+  const x = o.w < 0 ? o.x + o.w : o.x, y = o.h < 0 ? o.y + o.h : o.y;
+  const e = mathEntry(o.tex, inkPaint(o.color), onload);
+  if (e.status === 'ready' && e.img) {
+    const k = Math.min(aw / e.w, ah / e.h);
+    const dw = e.w * k, dh = e.h * k;
+    ctx.drawImage(e.img, x + (aw - dw) / 2, y + (ah - dh) / 2, dw, dh);
+    return;
+  }
+  ctx.save();
+  ctx.strokeStyle = 'rgba(128,128,128,.45)';
+  ctx.lineWidth = Math.max(1, Math.min(aw, ah) / 80);
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(x, y, aw, ah);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(128,128,128,.8)';
+  const size = Math.max(6, Math.min(ah * 0.4, aw / Math.max(4, String(o.tex || '').length * 0.6)));
+  ctx.font = `${size}px ui-monospace, Consolas, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(o.tex || ''), x + aw / 2, y + ah / 2, aw);
+  ctx.restore();
+}
+
 export function drawImage(ctx, o, onload) {
   const img = getImage(o.src, onload);
   ctx.save();
@@ -789,7 +828,7 @@ export function drawTable(ctx, o, hideCell = null) {
     if (!t || key === hideCell) continue;
     drawTextBlock(ctx, t, o.x + c * cw + 6, o.y + r * ch + 6, cw - 12, ch - 12, {
       runs: objectRuns(o, key),
-      color: o.textColor || '#201f1e', size: o.fontSize || 0, maxSize: 26,
+      color: o.textColor || '#201f1e', ownInk: true, size: o.fontSize || 0, maxSize: 26,
       align: 'center', valign: 'middle', family: FONT, weight: o.headerRow && r === 0 ? '600' : '400'
     });
   }
@@ -906,6 +945,7 @@ export function drawObject(ctx, o, onload, editing = null) {
     case 'text': drawText(ctx, o, hideText); break;
     case 'image': drawImage(ctx, o, onload); break;
     case 'emoji': drawEmoji(ctx, o); break;
+    case 'math': drawMath(ctx, o, onload); break;
     case 'table': drawTable(ctx, o, hideCell); break;
     case 'curtain': drawCurtain(ctx, o); break;
   }

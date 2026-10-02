@@ -7,6 +7,7 @@ import { objectRuns, layoutRich, effective } from './core/richtext.js';
 import { layoutPages } from './ui/pdfdialog.js';
 import { FONT, faceOf, CURTAIN_COLOR } from './core/render.js';
 import { t } from './i18n.js';
+import { mathEntry, mathPng, hasMaths, inlineFit } from './core/maths.js';
 
 /**
  * What a bitmap or vector export covers.
@@ -38,6 +39,7 @@ export async function exportPng(app, { scale = 2, transparent = false, selection
     box = app.surface.selectionBounds();
     box = { x: box.x - 24, y: box.y - 24, w: box.w + 48, h: box.h + 48 };
   } else box = exportBounds(app);
+  await app.mathsReady?.();
 
   const maxPx = 12000;
   const s = Math.min(scale, maxPx / Math.max(box.w, box.h));
@@ -57,6 +59,7 @@ export async function exportPng(app, { scale = 2, transparent = false, selection
 }
 
 export async function exportSvg(app) {
+  await app.mathsReady?.();
   const box = exportBounds(app);
   const svg = buildSvg(app, box);
   const filePath = await window.board.saveDialog({
@@ -106,6 +109,18 @@ export function buildSvg(app, box) {
        */
       const size = Math.min(o.w, o.h);
       parts.push(`<text x="${o.x + o.w / 2}" y="${o.y + o.h / 2}" font-size="${size}" text-anchor="middle" dominant-baseline="central" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"${rot}>${esc(o.ch || '')}</text>`);
+    } else if (o.type === 'math') {
+      /*
+       * A maths box goes out as a sharp picture of the formula. The board's
+       * own picture of it is an SVG holding web page text, which browsers show
+       * but Word, Inkscape and Illustrator do not; a PNG every one of them can.
+       */
+      const e = mathEntry(o.tex, o.color || '#201f1e');
+      if (e.status === 'ready' && e.img) {
+        const k = Math.min(Math.abs(o.w) / e.w, Math.abs(o.h) / e.h), dw = e.w * k, dh = e.h * k;
+        const x = Math.min(o.x, o.x + o.w) + (Math.abs(o.w) - dw) / 2, y = Math.min(o.y, o.y + o.h) + (Math.abs(o.h) - dh) / 2;
+        parts.push(`<image x="${x}" y="${y}" width="${dw}" height="${dh}" href="${mathPng(e, dw, dh)}"${rot}><title>${esc(o.tex || '')}</title></image>`);
+      }
     } else if (o.type === 'image') {
       parts.push(`<image x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" href="${o.src}" preserveAspectRatio="none"${rot}/>`);
     } else if (o.type === 'curtain') {
@@ -164,7 +179,7 @@ function shapeSvg(o, rot) {
 function textSvg(meas, text, x, y, w, h, opt, rot) {
   const size = opt.size || 20;
   const family = faceOf(opt.font);      // every face, not just handwriting
-  if (opt.runs) return richTextSvg(meas, x, y, w, h, opt, rot, size, family);
+  if (opt.runs || hasMaths(text)) return richTextSvg(meas, x, y, w, h, { ...opt, runs: opt.runs || [{ t: text }] }, rot, size, family);
   meas.font = `${size}px ${family}`;
   const lines = wrapText(meas, text, w);
   const lh = size * 1.28;
@@ -190,7 +205,33 @@ function richTextSvg(meas, x, y, w, h, opt, rot, size, family) {
   if (opt.valign === 'middle') ty = y + (h - lines.length * lh) / 2 + size;
   const anchor = opt.align === 'center' ? 'middle' : opt.align === 'right' ? 'end' : 'start';
   const tx = opt.align === 'center' ? x + w / 2 : opt.align === 'right' ? x + w : x;
+  // A line with maths in it is laid out piece by piece, so each formula's
+  // picture can sit exactly where the board draws it.
+  const pictures = [];
   const rows = lines.map((line, i) => {
+    if (line.segs.some((sg) => sg.math != null)) {
+      let lx = opt.align === 'center' ? x + (w - line.w) / 2 : opt.align === 'right' ? x + w - line.w : x;
+      const by = ty + i * lh;
+      const out = [];
+      for (const sg of line.segs) {
+        const e0 = effective(sg.st, base);
+        const me = sg.math != null ? mathEntry(sg.math, e0.color || '#201f1e', null, false) : null;
+        if (me && me.status === 'ready' && me.img) {
+          const f = inlineFit(me, size, lh);
+          const dw = me.w * f.k, dh = me.h * f.k;
+          pictures.push(`<image x="${(lx - f.pad).toFixed(1)}" y="${(by - me.base * f.k).toFixed(1)}" width="${dw.toFixed(1)}" height="${dh.toFixed(1)}" href="${mathPng(me, dw, dh)}"><title>${esc(sg.math)}</title></image>`);
+        } else {
+          const attrs = [];
+          if (e0.bold) attrs.push('font-weight="600"');
+          if (e0.italic) attrs.push('font-style="italic"');
+          if (e0.underline) attrs.push('text-decoration="underline"');
+          if (e0.color && e0.color !== base.color) attrs.push(`fill="${esc(e0.color)}"`);
+          out.push(`<tspan x="${lx.toFixed(1)}" y="${by.toFixed(1)}" text-anchor="start" ${attrs.join(' ')}>${esc(sg.t)}</tspan>`);
+        }
+        lx += sg.w;
+      }
+      return out.join('');
+    }
     const segs = line.segs.map((sg) => {
       const e = effective(sg.st, base);
       const attrs = [];
@@ -202,7 +243,8 @@ function richTextSvg(meas, x, y, w, h, opt, rot, size, family) {
     }).join('');
     return `<tspan x="${tx}" y="${(ty + i * lh).toFixed(1)}">${segs}</tspan>`;
   }).join('');
-  return `<text xml:space="preserve" font-family="${esc(family).replace(/"/g, "'")}" font-size="${size}" fill="${esc(base.color)}" text-anchor="${anchor}"${rot}>${rows}</text>`;
+  const words = `<text xml:space="preserve" font-family="${esc(family).replace(/"/g, "'")}" font-size="${size}" fill="${esc(base.color)}" text-anchor="${anchor}"${rot}>${rows}</text>`;
+  return pictures.length ? `<g${rot}>${words.replace(rot, '')}${pictures.join('')}</g>` : words;
 }
 
 /* ------------------------------------------------------------------ *
@@ -215,6 +257,7 @@ function richTextSvg(meas, x, y, w, h, opt, rot, size, family) {
 const MM_PER_PX = 25.4 / 96;
 
 export async function exportPdf(app, opts) {
+  await app.mathsReady?.();
   // A pad exports as itself: one PDF page per board page, at the board's own
   // paper size. The tiling path below is for infinite boards, which have no
   // page boundaries of their own and have to be cut into sheets somehow.

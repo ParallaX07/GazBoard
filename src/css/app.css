@@ -1328,3 +1328,108 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
   font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 6px; max-width: 190px;
   border: 1px solid var(--stroke); background: var(--surface); color: var(--text);
 }
+
+/* ===================================================================
+ *  My boards as a whole page: folders down the side, then the folder
+ *  you are in as coloured folder tiles and board pictures. Every colour
+ *  comes from the theme, so it follows light and dark by itself; only
+ *  the folders bring their own (--fc).
+ * =================================================================== */
+.panel.page { left: 0; width: auto; border-left: 0; box-shadow: none; background: var(--bg); }
+.panel.page:not(.open) { transform: none; opacity: 0; transition: opacity .15s ease, visibility 0s linear .15s; }
+.panel.page.open { transition: opacity .15s ease, visibility 0s; }
+.panel.page header { background: var(--surface); }
+.panel.page .body { padding: 0; overflow: hidden; display: flex; }
+.gallery { flex: 1; min-height: 0; display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+.gal-side { overflow-y: auto; padding: 14px 8px; background: var(--surface); border-inline-end: 1px solid var(--stroke); }
+.side-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--text-2); padding: 4px 12px 10px; }
+.side-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 12px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 13.5px; text-align: start; cursor: pointer; }
+.side-item:hover { background: var(--surface-2); }
+.side-item.here { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.side-icon { display: flex; flex: none; color: var(--text-2); }
+.side-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-count { font-size: 12px; color: var(--text-2); font-weight: 400; }
+.gal-main { overflow-y: auto; padding: 18px 24px 28px; }
+.gal-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.gal-head .crumbs { margin: 0; font-size: 17px; }
+.gal-head .crumb { max-width: 18em; }
+.gal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.gal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 22px 0 12px; font-size: 13px; color: var(--text-2); }
+.gal-note { font-size: 12px; color: var(--text-2); margin-top: 18px; }
+
+/* folders: a coloured card with a folder drawn on it */
+.folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 14px; }
+.tile-wrap { position: relative; min-width: 0; }
+.folder-tile { position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 2px; width: 100%; aspect-ratio: 4 / 3; padding: 14px; border-radius: 14px; cursor: pointer; text-align: start; font: inherit; color: var(--text);
+  background: var(--surface); background: color-mix(in srgb, var(--fc) 16%, var(--surface));
+  border: 1px solid var(--stroke); border-color: color-mix(in srgb, var(--fc) 38%, transparent); transition: transform .12s, box-shadow .12s; }
+.folder-tile:hover { box-shadow: var(--shadow-2); }
+.ft-tab { position: absolute; top: 18px; inset-inline-start: 14px; width: 48px; height: 36px; border-radius: 3px 8px 8px 8px; background: var(--fc); }
+.ft-tab::before { content: ''; position: absolute; top: -6px; inset-inline-start: 0; width: 20px; height: 8px; border-radius: 4px 4px 0 0; background: var(--fc); }
+.ft-count { position: absolute; top: 26px; inset-inline-start: 14px; width: 48px; text-align: center; font-size: 13px; font-weight: 700; color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.25); }
+.ft-name { display: block; max-width: 100%; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ft-what { font-size: 12px; color: var(--text-2); }
+
+/* boards: their picture, name and date */
+.board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 16px; }
+.board-tile { display: flex; flex-direction: column; width: 100%; padding: 0; border-radius: 12px; overflow: hidden; cursor: pointer; text-align: start; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--stroke); transition: box-shadow .12s; }
+.board-tile:hover { box-shadow: var(--shadow-2); }
+.board-tile.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.bt-thumb { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 10; background: var(--surface-2); border-bottom: 1px solid var(--stroke); overflow: hidden; }
+.bt-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bt-blank { display: flex; color: var(--text-2); opacity: .6; }
+.bt-name { display: block; padding: 9px 12px 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-date { display: block; padding: 2px 12px 10px; font-size: 12px; color: var(--text-2); }
+.ft-actions, .bt-actions { position: absolute; display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-2); opacity: 0; transition: opacity .12s; }
+.ft-actions { top: 8px; inset-inline-end: 8px; }
+.bt-actions { top: 8px; inset-inline-end: 8px; }
+.ft-actions .icon-btn, .bt-actions .icon-btn { width: 30px; height: 30px; }
+.tile-wrap:hover .ft-actions, .tile-wrap:hover .bt-actions, .tile-wrap:focus-within .ft-actions, .tile-wrap:focus-within .bt-actions { opacity: 1; }
+.board-wrap .tick { position: absolute; top: 8px; inset-inline-start: 8px; z-index: 2; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-2); opacity: 0; transition: opacity .12s; cursor: pointer; }
+.board-wrap .tick input { width: 17px; height: 17px; margin: 0; cursor: pointer; }
+.board-wrap:hover .tick, .board-wrap.ticked .tick, .board-wrap .tick:focus-within { opacity: 1; }
+.board-wrap.ticked .board-tile { border-color: var(--accent-2); box-shadow: 0 0 0 2px var(--accent-2); }
+/* No hover on a touch screen: the buttons are simply always there. */
+@media (hover: none) {
+  .ft-actions, .bt-actions, .board-wrap .tick { opacity: 1; }
+}
+.folder-tile.lifted, .board-tile.lifted { opacity: .45; }
+.folder-tile.drop-here, .board-tile.drop-here, .side-item.drop-here { box-shadow: 0 0 0 3px var(--accent-2) !important; }
+.folder-swatches { grid-template-columns: repeat(4, 40px); gap: 12px; margin: 6px 0 14px; }
+.folder-swatches .sw { width: 40px; height: 40px; cursor: pointer; }
+.folder-swatches .sw.on { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--text); }
+@media (max-width: 760px) {
+  .gallery { grid-template-columns: minmax(0, 1fr); }
+  .gal-side { display: none; }
+  .gal-main { padding: 14px 14px 24px; }
+  .gal-head .crumbs { font-size: 15px; }
+  .folder-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+  .folder-tile { aspect-ratio: auto; min-height: 124px; padding: 12px; }
+  .ft-tab, .ft-count { inset-inline-start: 12px; top: 16px; }
+  .ft-count { top: 24px; }
+  .board-grid { grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 12px; }
+}
+
+/* ---------------- the maths editor ---------------- */
+.math-editor { position: absolute; z-index: 42; width: min(520px, calc(100% - 16px)); display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--stroke); box-shadow: var(--shadow-3); }
+.math-editor.docked { left: 8px !important; right: 8px; bottom: 8px; top: auto !important; width: auto; max-height: 70%; overflow-y: auto; }
+.mx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.mx-head b { font-size: 14px; }
+.mx-head small { font-size: 11.5px; color: var(--text-2); text-align: end; }
+.mx-src { width: 100%; min-height: 52px; resize: vertical; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: 14px/1.45 ui-monospace, Consolas, "Cascadia Mono", monospace; direction: ltr; text-align: left; }
+.mx-src:focus { outline: 2px solid var(--accent-2); outline-offset: -1px; }
+.mx-preview { min-height: 56px; overflow-x: auto; overflow-y: hidden; display: flex; align-items: center; justify-content: center; padding: 14px 10px; border-radius: 8px; background: var(--bg); font-size: 22px; direction: ltr; }
+.mx-preview .katex-display { margin: 0; }
+.mx-empty { font-size: 13px; color: var(--text-2); }
+.mx-error { min-height: 0; font-size: 12px; color: #c4314b; }
+.mx-error:empty { display: none; }
+.mx-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--stroke); }
+.mx-tab { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12.5px; padding: 6px 10px; border-bottom: 2px solid transparent; cursor: pointer; }
+.mx-tab.on { color: var(--accent-2); border-bottom-color: var(--accent-2); font-weight: 600; }
+.mx-palette { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; max-height: 132px; overflow-y: auto; direction: ltr; }
+.mx-key { min-height: 36px; padding: 0 4px; border-radius: 6px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: 15px/1 "Cambria Math", "STIX Two Math", "Latin Modern Math", serif; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-key:hover { border-color: var(--accent-2); color: var(--accent-2); }
+.mx-key.typeset { font: inherit; font-size: 13px; }
+.mx-key.typeset .katex { font-size: 1em; }
+.mx-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.mx-tip { flex: 1; font-size: 11.5px; color: var(--text-2); }

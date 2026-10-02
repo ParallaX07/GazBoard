@@ -250,6 +250,7 @@ function initPhoneToolbar(app, bar) {
     openPopover(add, h('div', { class: 'menu' },
       menuItem(t('Sticky note'), 'note', pickTool('note')),
       menuItem(t('Text'), 'text', pickTool('text')),
+      menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
       menuItem(t('Emoji'), 'emoji', () => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, add, 'emoji'); }),
       // Shapes are a family, not one square. The chooser lives in the tool
       // popover, and on a phone there is no shape button to open it from - so
@@ -718,6 +719,7 @@ export function openInsertPopover(app, anchor) {
     menuItem(t('Image…'), 'image', () => app.command('insert.image')),
     menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
     menuItem(t('Table'), 'table', () => app.command('insert.table')),
+    menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
     menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain')),
     h('div', { class: 'menu-sep' }),
     menuItem(t('Paste from clipboard'), 'copy', () => app.command('edit.paste'), { key: 'Ctrl+V' }),

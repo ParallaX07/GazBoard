@@ -16,6 +16,8 @@ import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js'
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
 import { folderOf, folderPath } from './core/folders.js';
 import { TextEditor } from './ui/textedit.js';
+import { MathEditor } from './ui/mathedit.js';
+import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './core/maths.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { initPresentBar, syncPresentBar } from './ui/present.js';
 import { ClassTimer } from './ui/timer.js';
@@ -25,7 +27,7 @@ import { closePopover, popoverOpen, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS, penById, rememberPen, heldPenId, FONTS } from './ui/palettes.js';
 import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportable } from './export.js';
-import { boardThumb } from './ui/thumb.js';
+import { boardThumb, boardPicture } from './ui/thumb.js';
 import {
   pickAndInsertDocument, pickAndInsertImage, insertDocument,
   insertImagesFromPaths, insertImageFiles, clipboardFileName, dropOrigin, isImagePath, isDocPath
@@ -63,7 +65,7 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -179,6 +181,13 @@ class App {
     this.boardPoint = null;
     this.ruler = { visible: false, x: 0, y: 0, angle: 0, length: 900, thickness: 78, snap: true };
     this.textEditor = new TextEditor(this);
+    this.mathEditor = new MathEditor(this);
+    // Maths in text arrives a moment after the words around it: one repaint per frame catches it all up.
+    let mathFrame = 0;
+    onMathArrived(() => {
+      if (mathFrame) return;
+      mathFrame = requestAnimationFrame(() => { mathFrame = 0; this.surface?.repaintAll?.(); });
+    });
     this.panels = createPanels(this);
     this.interaction = new Interaction(this);
 
@@ -415,6 +424,9 @@ class App {
      * it is only going to write out.
      */
     const doc = await this.externaliseAssets(this.store.toJSON());
+    await this.mathsReady();
+    const pic = this.boardPictureFor(force);
+    if (pic) doc.thumb = pic;
     await window.board.boards.save({ id: doc.id, json: JSON.stringify(doc) });
     this.unsavedNew = false;
     this._unsaved = false;
@@ -422,6 +434,25 @@ class App {
     try { localStorage.setItem('gazboard.lastBoard', this.store.doc.id); } catch {}
     const b = document.getElementById('savedBadge');
     b.textContent = t('Saved');
+  }
+
+  /**
+   * The little picture of this board that My boards shows.
+   *
+   * Drawing it costs a few milliseconds on a busy board, and autosave runs
+   * often, so it is redrawn only when the board has changed AND the last one is
+   * more than a few seconds old - or when a save was asked for, or the board
+   * is a different one. In between, the last picture is saved again as it is,
+   * so a save never drops it.
+   */
+  boardPictureFor(force = false) {
+    const id = this.store.doc.id, rev = this.store.rev, now = Date.now();
+    const p = this._pic;
+    if (p && p.id === id && (p.rev === rev || (!force && now - p.at < 15000))) return p.url;
+    const url = boardPicture(this.store.objects, this.store.doc.background);
+    if (!url) return p && p.id === id ? p.url : null;
+    this._pic = { id, rev, at: now, url };
+    return url;
   }
 
   /**
@@ -765,6 +796,10 @@ class App {
     // arriving from another computer asks ONE question rather than two.
     if (!opts.startup && !opts.claimed && data && data.origin) data = await this.claimLocalBoard(data);
     this.textEditor.cancel();
+    this.mathEditor?.close();
+    // A board asked for by name is what the person wants to see: the My boards
+    // page, if it is up, steps aside for it.
+    if (!opts.startup && this.panels?.page) this.panels.close();
     data = await this.resolveAssets(data);
     this.store.load(data);
     this.unsavedNew = false;
@@ -1203,6 +1238,63 @@ class App {
   }
 
   beginTextEdit(obj, cell) { this.textEditor.begin(obj, cell); this.syncUI(); }
+
+  /** Every maths box on this board, ready to draw in an export's colours. See core/maths.js. */
+  mathsReady(objects = this.store.objects) {
+    return mathsReady(objects).catch(() => {});
+  }
+
+  /** Open the maths editor on a box, or (with null) for a new box in the middle of the view. */
+  beginMathEdit(obj) {
+    this.textEditor.cancel?.();
+    if (obj) { this.setSelection([obj.id]); this.mathEditor.open({ id: obj.id }); return; }
+    const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
+    this.setSelection([]);
+    this.mathEditor.open({ at: { x: view.x + view.w / 2, y: view.y + view.h / 2 } });
+  }
+
+  /**
+   * What the maths editor hands back. A new box is made only if something was
+   * typed; an edited box keeps its lettering size and its top-left corner, and
+   * grows or shrinks to the new formula; an edited box emptied out goes, the
+   * way an emptied text box does. Each is one undo step.
+   */
+  async commitMath(target, tex, original = '') {
+    tex = String(tex || '').trim();
+    const ink = (c) => c || '#201f1e';
+    if (target.id) {
+      const o = this.store.get(target.id);
+      if (!o) return null;
+      if (!tex) { this.store.remove([o.id], 'delete maths'); this.setSelection([]); return null; }
+      if (tex === String(o.tex || '').trim()) return o;
+      let size = null;
+      try { size = sizeOfBox(o, await mathReady(o.tex, ink(o.color))); } catch { /* the old one never drew */ }
+      const e = await mathReady(tex, ink(o.color));
+      if (!this.store.get(o.id)) return null;
+      const patch = { tex };
+      if (e.status === 'ready') {
+        const n = naturalSize(e, size || this.worldSize(this.settings.mathSize || 36));
+        patch.w = n.w; patch.h = n.h;
+      }
+      this.store.update(o.id, patch, 'edit maths');
+      this.setSelection([o.id]);
+      this.surface.invalidate();
+      return this.store.get(o.id);
+    }
+    if (!tex) return null;
+    const color = '#201f1e';
+    const e = await mathReady(tex, color);
+    const size = this.worldSize(this.settings.mathSize || 36);
+    const n = e.status === 'ready' ? naturalSize(e, size) : { w: size * 6, h: size * 2 };
+    const at = target.at || { x: 0, y: 0 };
+    const o = { id: uid('m'), type: 'math', tex, color, x: at.x - n.w / 2, y: at.y - n.h / 2, w: n.w, h: n.h, rotation: 0 };
+    this.interaction?.placeOnPaper?.(o);
+    this.store.add(o, 'maths');
+    this.setTool('select');
+    this.setSelection([o.id]);
+    this.syncUI();
+    return o;
+  }
 
   /**
    * After typing, hand the board back to the pen.
@@ -1646,6 +1738,7 @@ class App {
       case 'view.background': this.panels.background(); break;
 
       case 'insert.image': pickAndInsertImage(this); break;
+      case 'insert.math': this.beginMathEdit(null); break;
       case 'insert.document': pickAndInsertDocument(this); break;
       case 'insert.table': this.addTable(); break;
       case 'insert.curtain': this.addCurtain(); break;
@@ -1809,6 +1902,7 @@ class App {
    */
   async copyAsPicture() {
     if (!this.surface.selection.size || !window.board?.clipboardWrite) return false;
+    await this.mathsReady();
     let b = this.surface.selectionBounds();
     b = { x: b.x - 24, y: b.y - 24, w: b.w + 48, h: b.h + 48 };
     const s = Math.min(2, 8000 / Math.max(b.w, b.h));
@@ -3398,6 +3492,7 @@ class App {
       case 'F2': {
         const o = this.selected[0];
         if (o && ['note', 'text', 'shape', 'table'].includes(o.type)) this.beginTextEdit(o);
+        else if (o && o.type === 'math' && !o.locked) this.beginMathEdit(o);
         return;
       }
       case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {

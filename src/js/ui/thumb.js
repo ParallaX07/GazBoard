@@ -14,7 +14,7 @@
 // enlarged: content smaller than the frame is drawn at its own size and
 // centred rather than blown up to fill it.
 
-import { drawObject } from '../core/render.js';
+import { drawObject, isDarkBoard, setDarkBoard } from '../core/render.js';
 import { boundsOf } from '../core/store.js';
 
 // A board with tens of thousands of objects would take a visible pause to draw
@@ -22,18 +22,18 @@ import { boundsOf } from '../core/store.js';
 // picture is made from the first slice; at this size nobody can tell.
 const MAX_OBJECTS = 3000;
 
-function paint(objects, w, h, onload) {
-  const dpr = 2;                                   // sharp on any screen
+function paint(objects, w, h, onload, { bg = '#ffffff', dpr = 2, type } = {}) {
   const c = document.createElement('canvas');
   c.width = w * dpr; c.height = h * dpr;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffffff';
+  const out = () => (type ? c.toDataURL(type, 0.8) : c.toDataURL());
+  ctx.fillStyle = bg || '#ffffff';
   ctx.fillRect(0, 0, c.width, c.height);
 
   const list = (Array.isArray(objects) ? objects : [])
     .filter((o) => o && !o.hidden)
     .slice(0, MAX_OBJECTS);
-  if (!list.length) return c.toDataURL();
+  if (!list.length) return out();
 
   let box = null;
   for (const o of list) {
@@ -46,7 +46,7 @@ function paint(objects, w, h, onload) {
       h: Math.max(box.y + box.h, b.y + b.h) - Math.min(box.y, b.y)
     } : { ...b };
   }
-  if (!box || box.w <= 0 || box.h <= 0) return c.toDataURL();
+  if (!box || box.w <= 0 || box.h <= 0) return out();
 
   const pad = 8 * dpr;
   // Capped at 1: a single small scribble is shown at the size it was drawn,
@@ -60,7 +60,7 @@ function paint(objects, w, h, onload) {
   for (const o of list) {
     try { drawObject(ctx, o, onload); } catch { /* one bad object is not a broken dialog */ }
   }
-  return c.toDataURL();
+  return out();
 }
 
 /**
@@ -91,4 +91,20 @@ export function boardThumb(objects, w = 168, h = 106) {
   const render = () => { img.src = paint(objects, w, h, later); };
   render();
   return img;
+}
+
+/**
+ * The picture My boards shows for a board, as a small data URL saved inside the
+ * board file itself (so it travels with it, and every platform's board list
+ * already hands it back). Drawn like an export - the board's own paper and
+ * ink, never the dark screen theme - so the same board looks the same in every
+ * theme and on every device it is opened on.
+ */
+export function boardPicture(objects, background, w = 240, h = 150) {
+  const was = isDarkBoard();
+  setDarkBoard(false);
+  try {
+    return paint(objects, w, h, () => {}, { bg: background && background.color, dpr: 1.5, type: 'image/webp' });
+  } catch { return null; }
+  finally { setDarkBoard(was); }
 }

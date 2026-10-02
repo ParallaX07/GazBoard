@@ -24,6 +24,8 @@
 // A text with no styled run at all stores no runs, so boards that never use
 // any of this are byte-for-byte what they were.
 
+import { mathEntry, mathSpans, inlineFit } from './maths.js';
+
 const KEYS = ['b', 'i', 'u', 'c'];
 
 /** Two runs look the same. */
@@ -115,7 +117,14 @@ function paragraphs(runs) {
   }
   return paras.map((pieces) => {
     const units = [];
-    for (const p of pieces) {
+    for (const p of mathTokens(pieces)) {
+      if (p.math != null) {
+        // A formula is one unbreakable piece of whatever word it sits in.
+        const last = units[units.length - 1];
+        if (last && !last.space) last.parts.push(p);
+        else units.push({ space: false, parts: [p] });
+        continue;
+      }
       for (const tok of p.t.split(/(\s+)/)) {
         if (!tok) continue;
         const space = /^\s+$/.test(tok);
@@ -128,6 +137,67 @@ function paragraphs(runs) {
   });
 }
 
+/*
+ * Cut a paragraph's pieces at its $...$ stretches. Each stretch becomes one
+ * piece carrying its LaTeX (and the style of its first letter); the words
+ * around it stay as they were. A stretch may cross a change of style - the
+ * maths just takes the style it started in.
+ */
+function mathTokens(pieces) {
+  const text = pieces.map((p) => p.t).join('');
+  const spans = mathSpans(text);
+  if (!spans.length) return pieces;
+  const out = [];
+  let off = 0, si = 0;
+  for (const p of pieces) {
+    const L = p.t.length;
+    let a = 0;
+    while (a < L) {
+      const g = off + a;
+      while (si < spans.length && spans[si].end <= g) si++;
+      const sp = spans[si];
+      if (sp && sp.start <= g) {
+        if (g === sp.start) out.push({ t: text.slice(sp.start, sp.end), st: p.st, math: sp.tex });
+        a = Math.min(L, sp.end - off);
+      } else {
+        const stop = sp ? Math.min(L, sp.start - off) : L;
+        out.push({ t: p.t.slice(a, stop), st: p.st });
+        a = stop;
+      }
+    }
+    off += L;
+  }
+  return out;
+}
+
+/** The colour inline maths is measured in. Its width does not depend on colour. */
+const MEASURE_INK = '#201f1e';
+
+/**
+ * How wide a formula in a line is: its picture's width once it is ready, the
+ * raw $...$ until then (and a repaint, through `onload`, when it arrives).
+ */
+function mathWidth(ctx, p, base, size, widthOfText) {
+  const e = mathEntry(p.math, MEASURE_INK, base.onload, false);
+  if (e.status === 'ready' && e.img) return inlineFit(e, size, size * (base.lineHeight || 1.28)).w;
+  return widthOfText(p.t, p.st);
+}
+
+/** How far below a 'top' baseline the letters sit on their line, for this font. */
+const baselines = new Map();
+function baselineBelowTop(ctx) {
+  const key = ctx.font;
+  if (!baselines.has(key)) {
+    const was = ctx.textBaseline;
+    ctx.textBaseline = 'top';
+    const m = ctx.measureText('H');
+    ctx.textBaseline = was;
+    baselines.set(key, m.actualBoundingBoxDescent || parseFloat(key.match(/(\d+(?:\.\d+)?)px/)?.[1] || 16) * 0.8);
+    if (baselines.size > 200) baselines.delete(baselines.keys().next().value);
+  }
+  return baselines.get(key);
+}
+
 /**
  * Lay the runs out in lines no wider than maxW.
  *
@@ -138,14 +208,15 @@ function paragraphs(runs) {
  * @returns {Array<{segs: Array<{t:string, st:object, w:number}>, w:number}>}
  */
 export function layoutRich(ctx, runs, maxW, base, size = base.size) {
-  const widthOf = (t, st) => { ctx.font = fontFor(effective(st, base), base, size); return ctx.measureText(t).width; };
+  const widthOfText = (t, st) => { ctx.font = fontFor(effective(st, base), base, size); return ctx.measureText(t).width; };
+  const widthOf = (t, st, math) => (math != null ? mathWidth(ctx, { t, st, math }, base, size, widthOfText) : widthOfText(t, st));
   const lines = [];
   for (const units of paragraphs(runs)) {
     let line = [], lineW = 0, ink = false;
     const finish = () => {
       while (line.length && /^\s+$/.test(line[line.length - 1].t)) lineW -= line.pop().w;
       const last = line[line.length - 1];
-      if (last && /\s$/.test(last.t)) {
+      if (last && last.math == null && /\s$/.test(last.t)) {
         const trimmed = last.t.replace(/\s+$/, '');
         lineW -= last.w - widthOf(trimmed, last.st);
         last.t = trimmed; last.w = widthOf(trimmed, last.st);
@@ -154,7 +225,7 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
       line = []; lineW = 0; ink = false;
     };
     for (const u of units) {
-      const parts = u.parts.map((p) => ({ ...p, w: widthOf(p.t, p.st) }));
+      const parts = u.parts.map((p) => ({ ...p, w: widthOf(p.t, p.st, p.math) }));
       const uw = parts.reduce((s, p) => s + p.w, 0);
       if (u.space) {
         if (!line.length) continue;                   // no line starts with a space
@@ -164,6 +235,11 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
       if (uw > maxW) {
         // Wider than the box on its own: letter by letter, wherever it has to.
         for (const p of parts) {
+          if (p.math != null) {                          // a formula is never cut
+            if (ink && lineW + p.w > maxW) finish();
+            line.push(p); lineW += p.w; ink = true;
+            continue;
+          }
           for (const ch of Array.from(p.t)) {
             const cw = widthOf(ch, p.st);
             if (ink && lineW + cw > maxW) finish();
@@ -179,7 +255,7 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
   // Widths re-measured over whole merged segments, which is what is drawn.
   for (const l of lines) {
     let w = 0;
-    for (const s of l.segs) { s.w = widthOf(s.t, s.st); w += s.w; }
+    for (const s of l.segs) { s.w = widthOf(s.t, s.st, s.math); w += s.w; }
     l.w = w;
   }
   return lines;
@@ -189,8 +265,8 @@ function mergeSegs(segs) {
   const out = [];
   for (const s of segs) {
     const last = out[out.length - 1];
-    if (last && sameStyle(last.st, s.st)) { last.t += s.t; last.w += s.w; }
-    else out.push({ t: s.t, st: s.st, w: s.w });
+    if (last && last.math == null && s.math == null && sameStyle(last.st, s.st)) { last.t += s.t; last.w += s.w; }
+    else out.push(s.math != null ? { t: s.t, st: s.st, w: s.w, math: s.math } : { t: s.t, st: s.st, w: s.w });
   }
   return out;
 }
@@ -218,6 +294,7 @@ const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 const LTR = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿঀ-৿一-鿿]/;
 function rtlLine(line) {
   for (const s of line.segs) {
+    if (s.math != null) continue;
     for (const ch of s.t) {
       if (RTL.test(ch)) return true;
       if (LTR.test(ch)) return false;
@@ -251,6 +328,16 @@ export function drawRichLines(ctx, lines, x, y, w, h, base, opt = {}) {
       const eff = effective(s.st, base);
       ctx.font = fontFor(eff, base, size);
       ctx.fillStyle = paint(eff.color);
+      if (s.math != null) {
+        const e = mathEntry(s.math, paint(eff.color), opt.onload || base.onload, false);
+        if (e.status === 'ready' && e.img) {
+          const f = inlineFit(e, size, lh);
+          const by = ty + baselineBelowTop(ctx);
+          ctx.drawImage(e.img, lx - f.pad, by - e.base * f.k, e.w * f.k, e.h * f.k);
+          lx += s.w;
+          continue;
+        }
+      }
       ctx.fillText(s.t, lx, ty);
       if (eff.underline && s.t.trim()) ctx.fillRect(lx, ty + size * 1.05, s.w, Math.max(1, size / 16));
       lx += s.w;

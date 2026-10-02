@@ -27,6 +27,9 @@ async function run(win, app) {
   const js = (code) => win.webContents.executeJavaScript(`(async () => { ${code} })()`, true);
 
   await sleep(900);
+  // GazBoard starts on the last board, the way Whiteboard does - never on My boards.
+  const startedOnBoards = await js(`await new Promise((r) => setTimeout(r, 600)); return !!(window.app.panels.open && window.app.panels.page) || document.getElementById('panel').classList.contains('page');`);
+  globalThis.__startedOnBoards = startedOnBoards;
 
   await js(`window.app.newBoard(true);`);
   await sleep(200);
@@ -3071,7 +3074,9 @@ async function run(win, app) {
     await a.persist({ force: true });
 
     const onDisk = await window.board.boards.load(boardId);
-    const diskText = JSON.stringify(onDisk);
+    // The little My boards picture is the one image a board file is meant to carry; the check is about the board's own pictures.
+    const diskText = JSON.stringify({ ...onDisk, thumb: undefined });
+    const thumbBytes = (onDisk.thumb || '').length;
     const diskPic = onDisk.objects.find(o => o.id === 'pic-a');
     const wroteAReference = typeof diskPic.src === 'string' && diskPic.src.startsWith('asset:');
     const noPixelsInBoardFile = !diskText.includes('data:image');
@@ -3122,11 +3127,13 @@ async function run(win, app) {
     return { wroteAReference, noPixelsInBoardFile, smallerThanThePicture, bothShareOneFile,
              cameBackWhole, nothingMarkedMissing, legacyOpened, legacyConverted, legacyStillLoadsBack,
              markedMissing, keptTheReference, referenceSurvivedResave, traversalRefused,
-             diskBytes: diskText.length, pictureBytes: png.length };
+             diskBytes: diskText.length, pictureBytes: png.length, thumbBytes };
   `);
   check('a saved board holds a reference, not the picture itself',
     assets.wroteAReference && assets.noPixelsInBoardFile && assets.smallerThanThePicture,
     `board file ${assets.diskBytes} bytes for a ${assets.pictureBytes}-byte picture`);
+  check('the My boards picture saved with the board stays small', assets.thumbBytes > 0 && assets.thumbBytes < 40000,
+    `thumbnail ${assets.thumbBytes} bytes (wanted some, under 40000)`);
   check('the same picture used twice is stored once', assets.bothShareOneFile);
   check('opening the board brings the picture back exactly',
     assets.cameBackWhole && assets.nothingMarkedMissing);
@@ -12918,6 +12925,163 @@ module.exports.run = async (win, app) => {
     check('a board inside a folder shows its folder path before its name in the top bar, and pressing the path opens that folder',
       r.path === 'CSE221 / Lectures /' && r.name === 'out-3' && r.opened === 'My boards › CSE221 › Lectures' && r.topPath === '(none)',
       `top bar: "${r.path}" + "${r.name}"; pressing it opened ${r.opened}; a top-level board shows a path: ${r.topPath}`);
+  }
+
+  /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const F = await import('app://board/js/core/folders.js');
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      if (a.panels.open) a.panels.close();
+      await a.loadBoard({ id: 'gal-1', name: 'gal-1', objects: [{ id: 'gn', type: 'note', x: 40, y: 40, w: 200, h: 200, color: '#ffd94a', text: 'Hi', rotation: 0, align: 'center', font: 'ui' }], order: ['gn'], pages: [], camera: { x: 0, y: 0, z: 1 } }, { silent: true });
+      await a.persist({ force: true });
+      const listed = (await window.board.boards.list()).find((b) => b.id === 'gal-1');
+      a.settings.folders = []; a.settings.boardFolders = {};
+      const fid = F.createFolder(a.settings, 'Colours');
+      a.boardFolder = null;
+      await a.panels.boards(); await wait(250);
+      const panel = document.getElementById('panel');
+      const tile = document.querySelector('#boardList [data-folder="' + fid + '"]');
+      const out = {
+        page: panel.classList.contains('page'),
+        width: Math.round(panel.getBoundingClientRect().width), winWidth: window.innerWidth,
+        side: !!document.querySelector('#boardList .gal-side [data-side-folder="' + fid + '"]'),
+        fc: tile ? tile.style.getPropertyValue('--fc') : '(no tile)',
+        thumbListed: (listed && listed.thumb || '').slice(0, 11),
+        thumbShown: !!document.querySelector('#boardList [data-board="gal-1"] .bt-thumb img')
+      };
+      document.querySelector('#boardList [data-colour-folder="' + fid + '"]').click(); await wait(120);
+      const sw = document.querySelector('#overlayCard [data-folder-colour="#7b5cd6"]');
+      out.swatches = document.querySelectorAll('#overlayCard [data-folder-colour]').length;
+      sw && sw.click(); await wait(250);
+      out.saved = (a.settings.folders.find((f) => f.id === fid) || {}).color;
+      try { out.stored = (JSON.parse(localStorage.getItem('gazboard.settings')).folders.find((f) => f.id === fid) || {}).color; } catch { out.stored = '(unreadable)'; }
+      out.fcAfter = document.querySelector('#boardList [data-folder="' + fid + '"]').style.getPropertyValue('--fc');
+      a.panels.close(); await wait(250);
+      out.pageAfterClose = panel.classList.contains('page');
+      // the switch in Settings: the full page by default, the plain side-panel list when off
+      out.defaultOn = a.settings.boardsPage === true;
+      a.settings.boardsPage = false;
+      await a.panels.boards(); await wait(200);
+      out.listIsPage = panel.classList.contains('page');
+      out.listWidth = Math.round(panel.getBoundingClientRect().width);
+      out.listRows = document.querySelectorAll('#boardList .board-row').length;
+      out.listSide = !!document.querySelector('#boardList .gal-side');
+      a.panels.close(); await wait(200);
+      a.settings.boardsPage = true;
+      // a board opened while the page is up puts the page away
+      await a.panels.boards(); await wait(150);
+      await a.loadBoard({ id: 'gal-2', name: 'gal-2', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } });
+      out.pageAfterLoad = a.panels.page;
+      if (a.panels.open) a.panels.close();
+      a.settings.folders = []; a.settings.boardFolders = {}; a.saveSettings();
+      for (const id of ['gal-1', 'gal-2']) { try { await window.board.boards.remove(id); } catch {} }
+      a.newBoard(true);
+      return out;`);
+    check('My boards is a whole page, with the folder list down the side and folders as coloured tiles',
+      r.page && r.width === r.winWidth && r.side && /^#[0-9a-f]{6}$/i.test(r.fc) && !r.pageAfterClose,
+      `page ${r.page}, ${r.width}px of ${r.winWidth}px; folder in the side list ${r.side}; tile colour ${r.fc}; still a page after closing ${r.pageAfterClose}`);
+    check('a folder colour picked from the palette is kept, in settings and on the tile',
+      r.swatches === 8 && r.saved === '#7b5cd6' && r.stored === '#7b5cd6' && r.fcAfter === '#7b5cd6',
+      `swatches ${r.swatches}; saved ${r.saved}, in storage ${r.stored}, tile now ${r.fcAfter} (wanted #7b5cd6)`);
+    check('a saved board carries its own little picture, and My boards shows it',
+      r.thumbListed === 'data:image/' && r.thumbShown, `board list thumb starts "${r.thumbListed}"; picture on the tile ${r.thumbShown}`);
+    check('My boards is the full page by default, and switched off it is the plain side-panel list',
+      r.defaultOn && !r.listIsPage && r.listWidth < r.winWidth / 2 && r.listRows > 0 && !r.listSide && !r.pageAfterLoad,
+      `default full page ${r.defaultOn}; switched off: a page ${r.listIsPage}, ${r.listWidth}px wide of ${r.winWidth}px, ${r.listRows} board rows, side folder list ${r.listSide}; page left up after opening a board ${r.pageAfterLoad}`);
+    check('GazBoard starts on the last board, never on My boards', !globalThis.__startedOnBoards,
+      `My boards was open when the app started: ${globalThis.__startedOnBoards}`);
+  }
+
+  /* ---- maths: boxes typeset by KaTeX, and $...$ inside words ---- */
+  {
+    const TEX = { q: 'x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}', s: '\\sum_{i=1}^{n} i', words: 'Runs in $O(n \\log n)$ time; costs $5 and $10.' };
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const M = await import('app://board/js/core/maths.js');
+      const ME = await import('app://board/js/ui/mathedit.js');
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      a.newBoard(true); a.surface.cam.x = 0; a.surface.cam.y = 0; a.surface.cam.z = 1;
+      const view = a.surface.cam.viewport(a.surface.width, a.surface.height);
+      const dark = (canvas) => { const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 110 && d[i + 1] < 110 && d[i + 2] < 110) n++; return n; };
+      const out = {};
+      // a new box from the editor
+      a.beginMathEdit(null); await wait(50);
+      out.editorOpen = !!document.getElementById('mathEditor');
+      a.mathEditor.value = ${JSON.stringify(TEX.q)};
+      const before = a.store.objects.length;
+      await a.mathEditor.finish();
+      const box = a.store.objects.find((o) => o.type === 'math');
+      out.made = a.store.objects.length - before;
+      out.tex = box && box.tex;
+      out.size = box ? [Math.round(box.w), Math.round(box.h)] : null;
+      out.keys = box ? Object.keys(box).sort().join(',') : '';
+      out.selected = a.selected.map((o) => o.type).join(',');
+      out.inkInBox = box ? dark(a.surface.renderTo({ x: box.x, y: box.y, w: box.w, h: box.h }, 1, true)) : -1;
+      // editing it, and one undo putting it back
+      a.beginMathEdit(box); await wait(30);
+      out.editorShows = a.mathEditor.value;
+      a.mathEditor.value = ${JSON.stringify(TEX.s)};
+      await a.mathEditor.finish();
+      out.edited = a.store.get(box.id).tex;
+      out.heightKept = Math.abs(a.store.get(box.id).h - box.h) < box.h;     // same lettering, a different formula
+      a.command('undo');
+      out.afterUndo = a.store.get(box.id).tex;
+      // Escape leaves it alone; an empty new box is never made
+      a.beginMathEdit(a.store.get(box.id)); await wait(30);
+      a.mathEditor.value = 'changed';
+      document.querySelector('#mathEditor textarea').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      out.afterEscape = a.store.get(box.id).tex;
+      out.editorGone = !document.getElementById('mathEditor');
+      const n0 = a.store.objects.length;
+      a.beginMathEdit(null); await wait(30); await a.mathEditor.finish();
+      out.emptyMade = a.store.objects.length - n0;
+      // the palette wraps what is selected
+      const ta = document.createElement('textarea'); ta.value = 'x+1'; document.body.appendChild(ta);
+      ta.setSelectionRange(0, 3); ME.insertTemplate(ta, '\\\\sqrt{@}'); out.wrapped = ta.value;
+      ta.value = 'a'; ta.setSelectionRange(1, 1); ME.insertTemplate(ta, '\\\\pi'); out.bare = ta.value; ta.remove();
+      // exports carry it
+      const svg = (await import('app://board/js/export.js')).buildSvg(a, { x: view.x, y: view.y, w: view.w, h: view.h });
+      out.svgImage = /<image[^>]+href="data:image\\/png[^"]+"[^>]*><title>/.test(svg);
+      // inline maths: prices stay prices
+      out.spans = M.mathSpans(${JSON.stringify(TEX.words)}).map((sp) => sp.tex);
+      out.price = M.hasMaths('A ticket costs $5 and $10.');
+      out.escaped = M.hasMaths('Not maths: \\\\$x\\\\$');
+      const tb = { id: 'mt1', type: 'text', x: view.x + 40, y: view.y + 400, w: 700, h: 60, rotation: 0, fontSize: 28, color: '#201f1e', text: ${JSON.stringify(TEX.words)} };
+      a.store.add(tb, 'a');
+      await a.mathsReady(); await wait(60);
+      const { layoutRich } = await import('app://board/js/core/richtext.js');
+      const ctx = document.createElement('canvas').getContext('2d');
+      const lines = layoutRich(ctx, [{ t: tb.text }], 2000, { family: 'sans-serif', weight: '400', size: 28, color: '#201f1e' });
+      out.mathSegs = lines.flatMap((l) => l.segs.filter((sg) => sg.math != null).map((sg) => sg.math));
+      const svg2 = (await import('app://board/js/export.js')).buildSvg(a, { x: view.x, y: view.y, w: view.w, h: view.h + 600 });
+      out.inlineSvg = (svg2.match(/<title>O\\(n \\\\log n\\)<\\/title>/g) || []).length;
+      out.savedText = a.store.get('mt1').text === tb.text;
+      // a sticky note keeps its dark words on the dark theme
+      a.store.add({ id: 'dn1', type: 'note', x: view.x + 800, y: view.y + 40, w: 200, h: 200, rotation: 0, color: '#ffd94a', align: 'center', font: 'ui', text: 'WWWW' }, 'a');
+      const R = await import('app://board/js/core/render.js');
+      const c2 = document.createElement('canvas'); c2.width = 200; c2.height = 200;
+      const g = c2.getContext('2d'); g.translate(-(view.x + 800), -(view.y + 40));
+      R.setDarkBoard(true); R.drawObject(g, a.store.get('dn1'), () => {}); R.setDarkBoard(a.darkMode);
+      out.noteDarkInk = dark(c2);
+      a.newBoard(true);
+      return out;`);
+    check('a maths box is made from the editor, typeset, selected, and saved as its LaTeX alone',
+      r.editorOpen && r.made === 1 && r.tex === TEX.q && r.size && r.size[0] > 100 && r.size[1] > 30 && r.selected === 'math' && r.inkInBox > 200
+        && r.keys === 'color,h,id,rotation,tex,type,w,x,y',
+      `editor opened ${r.editorOpen}; made ${r.made}; tex ${JSON.stringify(r.tex)}; size ${JSON.stringify(r.size)}; selected ${r.selected}; dark pixels drawn ${r.inkInBox} (wanted over 200); stored keys ${r.keys}`);
+    check('editing a maths box changes its formula as one undo step, and Escape changes nothing',
+      r.editorShows === TEX.q && r.edited === TEX.s && r.afterUndo === TEX.q && r.afterEscape === TEX.q && r.editorGone && r.emptyMade === 0,
+      `editor showed ${JSON.stringify(r.editorShows)}; after edit ${JSON.stringify(r.edited)}; after undo ${JSON.stringify(r.afterUndo)}; after Escape ${JSON.stringify(r.afterEscape)}, editor closed ${r.editorGone}; empty new box made ${r.emptyMade} (wanted 0)`);
+    check('the maths palette wraps the selected text, and keeps a bare command apart from the next letter',
+      r.wrapped === '\\sqrt{x+1}' && r.bare === 'a\\pi', `wrapped ${JSON.stringify(r.wrapped)} (wanted \\sqrt{x+1}); inserted ${JSON.stringify(r.bare)}`);
+    check('a maths box exports to SVG as a picture labelled with its LaTeX', r.svgImage, `image with title in the SVG: ${r.svgImage}`);
+    check('$...$ in words is maths, but prices and \\$ stay plain',
+      JSON.stringify(r.spans) === JSON.stringify(['O(n \\log n)']) && !r.price && !r.escaped,
+      `found ${JSON.stringify(r.spans)} in ${JSON.stringify(TEX.words)}; "$5 and $10" read as maths ${r.price}; escaped \\$ read as maths ${r.escaped}`);
+    check('maths in a text box is laid out as one piece, exported as a picture, and the text itself is untouched',
+      JSON.stringify(r.mathSegs) === JSON.stringify(['O(n \\log n)']) && r.inlineSvg === 1 && r.savedText,
+      `laid-out formulas ${JSON.stringify(r.mathSegs)}; pictures in the SVG ${r.inlineSvg} (wanted 1); stored text unchanged ${r.savedText}`);
+    check('a sticky note keeps dark words on the dark theme', r.noteDarkInk > 150, `dark pixels in the note on a dark board: ${r.noteDarkInk} (light words on yellow were the bug)`);
   }
 
   /* ---- the Windows Ink trail: a head start for the pen, never part of the board ---- */

@@ -127,3 +127,21 @@ export function pruneBoards(s, list) {
   if (changed) s.boardFolders = map;
   return changed;
 }
+
+/** The colours a folder can wear. Bright enough on a light page, calm enough on a dark one. */
+export const FOLDER_COLOURS = ['#e8484b', '#f28c28', '#f2c12e', '#3fae5a', '#2f8fd8', '#7b5cd6', '#d0458e', '#7a7f87'];
+
+/** A folder's colour: the one chosen for it, or one picked from its id so it never changes by itself. */
+export function folderColour(f) {
+  if (f && typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color)) return f.color;
+  let h = 0;
+  for (const ch of String(f && f.id || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return FOLDER_COLOURS[h % FOLDER_COLOURS.length];
+}
+
+/** Give a folder its own colour (a new list, like every other change here). */
+export function setFolderColour(s, id, colour) {
+  if (!byId(s, id) || !/^#[0-9a-f]{6}$/i.test(String(colour || ''))) return false;
+  s.folders = folderList(s).map((f) => (f.id === id ? { ...f, color: colour } : f));
+  return true;
+}
