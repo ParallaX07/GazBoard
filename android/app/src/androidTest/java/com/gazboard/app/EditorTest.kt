@@ -37,6 +37,8 @@ class EditorTest {
   @Test fun drawsUndoesSavesAndReopensThroughNativeBridge() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")
+      // Draw on the board GazBoard actually opened on, not the stand-in before the last board is reopened.
+      until(scenario, "window.app.startupSettled === true")
       until(scenario, "document.getElementById('savedBadge').textContent !== 'Saving…'")
       js(scenario, """
         window.testDone = false;

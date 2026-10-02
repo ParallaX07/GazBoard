@@ -205,7 +205,9 @@ class App {
     this.initDismissal();
     this.wireStore();
     this.initSync();
-    this.restoreLastBoard();
+    // startupSettled tells the device tests (and anything else that needs to know) that
+    // the board on screen is the one GazBoard opened on, not a stand-in about to be replaced.
+    this.restoreLastBoard().finally(() => { this.startupSettled = true; });
     // Board text cannot wait the way emoji can: until its faces land, every
     // line on the board is measured in a stand-in font and wraps wrongly.
     this.loadBoardFonts();
@@ -587,16 +589,22 @@ class App {
      * says so.
      *
      * An explicit request always wins over a guess about what to reopen.
+     *
+     * So does ink. Somebody who starts writing the moment the window appears
+     * has made the board in front of them theirs; reopening the last board on
+     * top of that, half a second later, would throw their first stroke away.
      */
-    if (this.boardOpenedExplicitly) return;
+    const rev0 = this.store.rev, doc0 = this.store.doc.id;
+    const taken = () => this.boardOpenedExplicitly || this.store.rev !== rev0 || this.store.doc.id !== doc0 || !!this.interaction?.action;
+    if (taken()) return;
     try {
       // Ask first, guess second. The main process knows a file was
       // double-clicked before this window even existed, so there is no need to
       // race it - if one is on its way, there is nothing here to decide.
       if ((await this.appInfo())?.pendingBoardFile) return;
-      if (this.boardOpenedExplicitly) return;
+      if (taken()) return;
       const res = await window.board.boards.resume();
-      if (this.boardOpenedExplicitly) return;   // a file arrived while we asked
+      if (taken()) return;   // a file arrived, or somebody started writing, while we asked
       if (res && res.board) {
         await this.loadBoard(res.board, { silent: true, startup: true });
         if (res.reason === 'newest') this.toast(t('Reopened your most recent board'));
@@ -608,10 +616,10 @@ class App {
     const id = localStorage.getItem('gazboard.lastBoard') || localStorage.getItem('openboard.lastBoard');
     if (id) {
       const data = await window.board.boards.load(id);
-      if (this.boardOpenedExplicitly) return;
+      if (taken()) return;
       if (data) { await this.loadBoard(data, { silent: true, startup: true }); return; }
     }
-    if (this.boardOpenedExplicitly) return;
+    if (taken()) return;
     this.newBoard(true);
   }
 

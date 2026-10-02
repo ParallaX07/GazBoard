@@ -12993,6 +12993,33 @@ module.exports.run = async (win, app) => {
       `My boards was open when the app started: ${globalThis.__startedOnBoards}`);
   }
 
+  /* ---- reopening the last board never lands on top of fresh ink ---- */
+  {
+    const r = await js(`const a = window.app;
+      await a.loadBoard({ id: 'reopen-me', name: 'reopen-me', objects: [{ id: 'old-note', type: 'note', x: 0, y: 0, w: 100, h: 100, color: '#ffd94a', text: 'old', rotation: 0, align: 'center', font: 'ui' }], order: ['old-note'], pages: [], camera: { x: 0, y: 0, z: 1 } }, { silent: true });
+      await a.persist({ force: true });
+      a.newBoard(true);
+      const fresh = a.store.doc.id;
+      const keep = a.boardOpenedExplicitly; a.boardOpenedExplicitly = false;
+      // the reopen starts, and before it lands somebody writes
+      const going = a.restoreLastBoard();
+      a.store.add({ id: 'first-ink', type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', hue: 0, opacity: 1, rotation: 0,
+        points: [{ x: 0, y: 0, p: .5 }, { x: 40, y: 10, p: .5 }], bbox: { x: 0, y: 0, w: 40, h: 10 } }, 'draw');
+      await going;
+      const out = { sameBoard: a.store.doc.id === fresh, inkKept: !!a.store.get('first-ink'), oldNote: !!a.store.get('old-note') };
+      // and untouched, it does reopen
+      a.newBoard(true);
+      await a.restoreLastBoard();
+      out.untouchedReopened = a.store.doc.id;
+      a.boardOpenedExplicitly = keep;
+      try { await window.board.boards.remove('reopen-me'); } catch {}
+      a.newBoard(true);
+      return out;`);
+    check('reopening the last board at start never replaces ink written in the meantime, and still reopens when nothing was touched',
+      r.sameBoard && r.inkKept && !r.oldNote && r.untouchedReopened === 'reopen-me',
+      `with ink written during the reopen: same board ${r.sameBoard}, ink kept ${r.inkKept}, old board's note showing ${r.oldNote}; untouched it reopened ${r.untouchedReopened} (wanted reopen-me)`);
+  }
+
   /* ---- maths: boxes typeset by KaTeX, and $...$ inside words ---- */
   {
     const TEX = { q: 'x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}', s: '\\sum_{i=1}^{n} i', words: 'Runs in $O(n \\log n)$ time; costs $5 and $10.' };
