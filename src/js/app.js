@@ -3343,6 +3343,10 @@ class App {
     // paste from the system clipboard
     document.addEventListener('paste', async (e) => {
       if (this.textEditor.active) return;
+      // Pasting into a box that takes typing - the maths editor, a sharing
+      // code, a board name, a dialog's field - is that box's paste, not the board's.
+      const el = e.target instanceof Element ? e.target : document.activeElement;
+      if (el && (el.closest?.('input, textarea, [contenteditable=""], [contenteditable="true"]') || el.isContentEditable)) return;
       /*
        * Which is newer is settled FIRST, before anything on the clipboard is
        * looked at. Asking "is there a picture?" before "whose copy is newer?"

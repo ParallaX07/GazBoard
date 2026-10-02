@@ -12993,6 +12993,36 @@ module.exports.run = async (win, app) => {
       `My boards was open when the app started: ${globalThis.__startedOnBoards}`);
   }
 
+  /* ---- pasting into a box that takes typing stays in that box ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const paste = (el, text) => {
+        const dt = new DataTransfer(); dt.setData('text/plain', text);
+        const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+        el.focus(); el.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      };
+      // something copied on the board, so the board would happily paste it
+      a.store.add({ id: 'pc1', type: 'note', x: 0, y: 0, w: 100, h: 100, color: '#ffd94a', text: 'copy me', rotation: 0, align: 'center', font: 'ui' }, 'add');
+      a.setSelection(['pc1']); a.copy(); a.setSelection([]);
+      const before = a.store.objects.length;
+      a.beginMathEdit(null); await new Promise((res) => setTimeout(res, 50));
+      const out = { mathsTaken: paste(document.querySelector('#mathEditor textarea'), '\\\\frac{1}{2}') };
+      a.mathEditor.cancel();
+      const input = document.createElement('input'); document.body.appendChild(input);
+      out.inputTaken = paste(input, 'ABCD-1234'); input.remove();
+      out.added = a.store.objects.length - before;
+      // and on the bare board, paste still pastes
+      document.activeElement && document.activeElement.blur && document.activeElement.blur();
+      paste(document.body, 'ignored'); await new Promise((res) => setTimeout(res, 80));
+      out.boardPasted = a.store.objects.length - before;
+      a.newBoard(true);
+      return out;`);
+    check('pasting into the maths editor or a typing box (a sharing code, a name) goes into that box, not onto the board',
+      !r.mathsTaken && !r.inputTaken && r.added === 0 && r.boardPasted === 1,
+      `board took the paste from the maths editor ${r.mathsTaken}, from an input ${r.inputTaken}; objects added by those ${r.added} (wanted 0); a paste on the bare board added ${r.boardPasted} (wanted 1)`);
+  }
+
   /* ---- reopening the last board never lands on top of fresh ink ---- */
   {
     const r = await js(`const a = window.app;
