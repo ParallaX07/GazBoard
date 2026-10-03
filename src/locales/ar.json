@@ -989,5 +989,13 @@
  "Enter to finish · Shift+Enter for a new line · Esc to cancel": "Enter للإنهاء · Shift+Enter لسطر جديد · Esc للإلغاء",
  "Tip: in any text, $x^2$ puts maths in a sentence.": "تلميح: في أي نص، تضع $x^2$ رياضيات داخل الجملة.",
  "My boards as a full page": "لوحاتي في صفحة كاملة",
- "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "مفعّل (افتراضي): المجلدات على الجانب، ومربعات مجلدات ملوّنة، وصورة لكل لوحة. معطّل: قائمة بسيطة في اللوحة الجانبية."
+ "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "مفعّل (افتراضي): المجلدات على الجانب، ومربعات مجلدات ملوّنة، وصورة لكل لوحة. معطّل: قائمة بسيطة في اللوحة الجانبية.",
+ "Video": "فيديو",
+ "Microsoft Office is not on this computer, so the usual converter was used": "لا يوجد Microsoft Office على هذا الحاسوب، لذا استُخدم المحوّل المعتاد",
+ "Microsoft Office could not convert this file, so the usual converter was used": "تعذّر على Microsoft Office تحويل هذا الملف، لذا استُخدم المحوّل المعتاد",
+ "Converted with Microsoft Office — reading pages…": "تم التحويل باستخدام Microsoft Office — جارٍ قراءة الصفحات…",
+ "Import with Microsoft Office (beta)": "الاستيراد باستخدام Microsoft Office (تجريبي)",
+ "Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.": "تُفتح ملفات Word وExcel وPowerPoint في Microsoft Office الخاص بك دون أن تظهر، وتُحفظ كصفحات PDF — نسخة مطابقة تمامًا كما يعرضها Microsoft Whiteboard. أبطأ: يحتاج Office بضع ثوانٍ ليبدأ. تُضبط جداول البيانات العريضة لتناسب صفحة واحدة عرضًا. إذا لم يكن Office مثبتًا، يُستخدم المحوّل المعتاد.",
+ "Animated slides come in after the last click": "تُستورد الشرائح المتحركة كما تبدو بعد آخر نقرة",
+ "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "تشغيل (افتراضي): تُستورد كل شريحة كما تبدو بعد انتهاء كل النقرات — ما يتلاشى يختفي، وما يتحرك يكون حيث يتوقف، وما يكبر يكون بحجمه الكامل. إيقاف: الشريحة كما هي قبل النقرة الأولى، وكل ما عليها ظاهر معًا."
 }

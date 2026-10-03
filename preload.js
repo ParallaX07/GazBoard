@@ -239,7 +239,9 @@ contextBridge.exposeInMainWorld('board', {
     answer: (ticket, outcome) => ipcRenderer.invoke('sync:answer', { ticket, outcome })
   },
 
-  importToPdf: (filePath) => ipcRenderer.invoke('import:toPdf', filePath),
+  importToPdf: (filePath, opts) => ipcRenderer.invoke('import:toPdf', filePath, opts || {}),
+  // this importer takes a fixed-up copy of a deck as bytes, and can be asked to use Microsoft Office
+  importTakesBytes: true,
   exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
 
   onMenu: (cb) => ipcRenderer.on('menu:command', (_e, id) => cb(id)),

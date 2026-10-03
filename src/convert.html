@@ -61,7 +61,7 @@
       await waitForAssets();
       window.board.convertReady({ token, widthMm: 210, heightMm: 297 });
     } else {
-      const { widthPx, heightPx, slides } = await pptxToSlides(buf);
+      const { widthPx, heightPx, slides } = await pptxToSlides(buf, { finalLook: q.get('finalLook') !== '0' });
       const root = document.getElementById('root');
       root.innerHTML = slides.join('');
       // A slide that is exactly page-height rounds up into a second sheet, so

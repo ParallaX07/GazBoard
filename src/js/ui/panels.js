@@ -1187,6 +1187,15 @@ export function createPanels(app) {
           // Windows only: elsewhere the switch would do nothing, so it is not offered.
           inkTrailSupported() ? row(t('Windows Ink trail (experimental)'), mkToggle(() => s.inkTrail === true, (v) => { s.inkTrail = v; app.inkTrail?.setEnabled(v); }),
             t('Lets Windows paint the newest bit of a pen stroke straight to the screen, so the ink stays closer to the nib — the way Microsoft Whiteboard does it. Only the plain pen uses it; the highlighter, rainbow and galaxy inks and the ruler draw as before. Nothing about your boards changes.')) : null,
+          // where GazBoard prepares the deck itself (the desktop app); the phone app always uses the final look
+          window.board?.importTakesBytes ? row(t('Animated slides come in after the last click'), mkToggle(() => s.slidesFinalLook !== false, (v) => { s.slidesFinalLook = v; app.saveSettings(); }),
+            t('On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.'))
+            : null,
+          // Windows desktop only: Office is driven through Windows itself, so elsewhere the switch would do nothing.
+          (window.board?.importTakesBytes && /Windows/i.test(navigator.userAgent || '')) || window.__gazboardShowOfficeRow === true
+            ? row(t('Import with Microsoft Office (beta)'), mkToggle(() => s.officeImport === true, (v) => { s.officeImport = v; app.saveSettings(); }),
+              t('Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.'))
+            : null,
           row(t('My boards as a full page'), mkToggle(() => s.boardsPage !== false, (v) => { s.boardsPage = v; app.saveSettings(); }),
             t('On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.')),
           row(t('Autosave'), mkToggle(() => s.autosave, (v) => (s.autosave = v)), t('Boards are stored locally on this computer.'))

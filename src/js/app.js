@@ -65,7 +65,7 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -301,6 +301,8 @@ class App {
     this.surface?.repaintAll?.();
     // the nib is a cursor, not a drawing - it has to be re-tinted by hand
     this.interaction?.refreshInkCursor?.();
+    // the selection's colour dot shows default ink as drawn, which just changed
+    if (this.surface?.selection?.size) { try { updateSelectionBar(this); } catch { /* no bar yet */ } }
     // and on a phone the status bar and navigation bar belong to Android, not
     // to this stylesheet - a dark board in a light frame is only half a theme
     try { window.board?.setTheme?.(want); } catch {}
@@ -316,6 +318,7 @@ class App {
       setDarkBoard(this.darkMode);
       this.surface?.repaintAll?.();
       this.interaction?.refreshInkCursor?.();
+      if (this.surface?.selection?.size) { try { updateSelectionBar(this); } catch { /* no bar yet */ } }
       this.syncUI();
     });
   }

@@ -6,6 +6,8 @@
 // pixel-perfect - shapes, text, pictures, tables and basic formatting.
 
 import { t } from '../i18n.js';
+import { fixSlideMedia } from './slidemedia.js';
+import { finalLook } from './slideanim.js';
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const relId = (el) => (el ? el.getAttributeNS(R_NS, 'embed') || el.getAttributeNS(R_NS, 'id') || el.getAttribute('r:embed') || el.getAttribute('r:id') : null);
@@ -195,11 +197,26 @@ async function renderShape(zip, slideDir, rels, sp, out) {
   }
 
   const spPr = nsFirst(sp, 'spPr');
-  const fill = colorOf(nsFirst(spPr, 'solidFill'));
-  const noFill = !!nsFirst(spPr, 'noFill');
-  const ln = nsFirst(spPr, 'ln');
-  const lnColor = colorOf(nsFirst(ln, 'solidFill'));
-  const lnW = ln?.getAttribute('w') ? Math.max(1, px(ln.getAttribute('w'))) : (lnColor ? 1 : 0);
+  /*
+   * The shape's own fill is a direct child of spPr. Looking anywhere inside
+   * it found the OUTLINE's <a:noFill/> - "no line" - and took it to mean no
+   * fill, so every filled shape without an outline vanished from the slide.
+   * A shape that names no fill at all takes its theme's (p:style fillRef).
+   */
+  const ownFill = childrenNamed(spPr, 'solidFill')[0] || null;
+  const noFill = childrenNamed(spPr, 'noFill').length > 0;
+  const styled = nsFirst(nsFirst(sp, 'style'), 'fillRef');
+  const fill = colorOf(ownFill) ||
+    (!noFill && !childrenNamed(spPr, 'gradFill').length && !childrenNamed(spPr, 'pattFill').length &&
+      styled && Number(styled.getAttribute('idx')) > 0 ? colorOf(styled) : null) ||
+    colorOf(childrenNamed(childrenNamed(spPr, 'gradFill')[0] || null, 'gsLst')[0] || null);
+  const ln = childrenNamed(spPr, 'ln')[0] || null;
+  const lnRef = nsFirst(nsFirst(sp, 'style'), 'lnRef');
+  const lnColor = childrenNamed(ln, 'noFill').length ? null
+    : colorOf(childrenNamed(ln, 'solidFill')[0] || null) ||
+      (lnRef && Number(lnRef.getAttribute('idx')) > 0 ? colorOf(lnRef) : null) ||
+      (ln?.getAttribute('w') ? '#000000' : null);
+  const lnW = !lnColor ? 0 : ln?.getAttribute('w') ? Math.max(1, px(ln.getAttribute('w'))) : 1;
   const box = [
     fill && !noFill ? `background:${fill};` : '',
     lnW ? `border:${lnW}px solid ${lnColor || '#000'};` : '',
@@ -211,9 +228,13 @@ async function renderShape(zip, slideDir, rels, sp, out) {
 /**
  * @returns {Promise<{widthPx:number,heightPx:number,slides:string[]}>}
  */
-export async function pptxToSlides(arrayBuffer) {
+export async function pptxToSlides(arrayBuffer, { finalLook: last = true } = {}) {
   const JSZip = window.JSZip;
   const zip = await JSZip.loadAsync(arrayBuffer);
+  // a blank video poster or an empty first GIF frame would be a black box or nothing
+  try { await fixSlideMedia(zip); } catch (e) { console.warn('[pptx] slide media left as it was:', e?.message || e); }
+  // and an animated slide as it looks after the last click (a deck already done is left alone: its animations are gone)
+  if (last) { try { await finalLook(zip); } catch (e) { console.warn('[pptx] animations left as they were:', e?.message || e); } }
 
   const presFile = zip.file('ppt/presentation.xml');
   if (!presFile) throw new Error(t('Not a PowerPoint file (ppt/presentation.xml missing)'));

@@ -370,6 +370,64 @@ class EditorTest {
       assertNull(storage.getAsset("../paired.enc"))
     } finally { root.deleteRecursively() }
   }
+  /*
+   * The page must be drawn whole. Before, only the part of the page-sized
+   * WebView that fitted on the phone's screen was drawn and stretched to
+   * fill the PDF page: the right side and the bottom of every Word page went
+   * missing and what was left looked zoomed in. Full-width lines of text are
+   * written here, so a whole page has ink near its right margin and near its
+   * bottom margin, and a cropped one has neither.
+   */
+  @Test fun convertedWordPagesAreDrawnToTheirEdges() {
+    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+      until(scenario, "!!window.app && !!window.app.store")
+      lateinit var activity: MainActivity
+      scenario.onActivity { activity = it }
+      val app = activity.application as GazBoardApplication
+      val folder = File(activity.cacheDir, "exports").apply { mkdirs() }
+      val line = "GazBoard draws the whole page from the left margin to the right margin and from the top to the bottom. "
+      val paragraphs = (1..60).joinToString("") { "<w:p><w:pPr><w:jc w:val=\"both\"/></w:pPr><w:r><w:t>$it. ${line.repeat(3)}</w:t></w:r></w:p>" }
+      val document = File(folder, "edges-test.docx")
+      ZipOutputStream(document.outputStream()).use { zip ->
+        fun entry(name: String, text: String) { zip.putNextEntry(ZipEntry(name)); zip.write(text.toByteArray()); zip.closeEntry() }
+        entry("[Content_Types].xml", """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>""")
+        entry("_rels/.rels", """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""")
+        entry("word/document.xml", """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>$paragraphs</w:body></w:document>""")
+      }
+      val uri = FileProvider.getUriForFile(activity, BuildConfig.APPLICATION_ID + ".files", document)
+      val handle = app.files.register(uri)
+      val result = activity.convertDocument(handle)
+      assertTrue("Conversion failed: $result", result.bool("ok"))
+      val token = result.str("token")
+      try {
+        PdfRenderer(ParcelFileDescriptor.open(app.files.file(token), ParcelFileDescriptor.MODE_READ_ONLY)).use { pdf ->
+          pdf.openPage(0).use { page ->
+            val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.WHITE)
+            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            fun ink(x0: Double, x1: Double, y0: Double, y1: Double): Int {
+              var n = 0
+              for (y in (bitmap.height * y0).toInt() until (bitmap.height * y1).toInt()) for (x in (bitmap.width * x0).toInt() until (bitmap.width * x1).toInt()) {
+                val p = bitmap.getPixel(x, y)
+                if (Color.red(p) < 160 && Color.green(p) < 160 && Color.blue(p) < 160) n++
+              }
+              return n
+            }
+            val right = ink(0.70, 0.92, 0.10, 0.90)
+            val bottom = ink(0.08, 0.92, 0.75, 0.92)
+            val left = ink(0.08, 0.30, 0.10, 0.90)
+            val screen = activity.resources.displayMetrics
+            val shape = "page ${page.width}x${page.height}pt, screen ${screen.widthPixels}x${screen.heightPixels}px at density ${screen.density}; " +
+              "ink near the left margin $left, near the right margin $right, near the bottom $bottom"
+            assertTrue("The left of the page has no text at all - nothing was drawn ($shape)", left > 200)
+            assertTrue("The right side of the page is empty - only the on-screen part of the page was drawn ($shape)", right > 200)
+            assertTrue("The bottom of the page is empty - only the on-screen part of the page was drawn ($shape)", bottom > 200)
+            bitmap.recycle()
+          }
+        }
+      } finally { app.files.release(token); document.delete() }
+    }
+  }
   @Test fun convertsWordAndTextToReadableMultipagePdf() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")

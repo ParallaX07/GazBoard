@@ -75,6 +75,18 @@ class MainActivity : ComponentActivity() {
     }
   }
   override fun onCreate(state: Bundle?) {
+    /*
+     * A Word or PowerPoint file is converted by laying each page out in a
+     * WebView the size of the page and drawing that WebView into a PDF page.
+     * An A4 page at the phone's pixel density is about twice as wide as the
+     * screen, and since Android 5 a WebView draws only the part of itself that
+     * is on screen unless told otherwise - so the PDF got the top-left corner
+     * of every page, blown up to fill it: "zoomed and cropped". This makes it
+     * draw the whole page. It has to be said before the first WebView in the
+     * app exists, which is why it is the first thing here; the board itself is
+     * one screen of canvas, so drawing "all of it" costs it nothing.
+     */
+    WebView.enableSlowWholeDocumentDraw()
     super.onCreate(state)
     WindowCompat.setDecorFitsSystemWindows(window, false)
     frame = FrameLayout(this)

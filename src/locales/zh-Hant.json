@@ -989,5 +989,13 @@
  "Enter to finish · Shift+Enter for a new line · Esc to cancel": "Enter 完成 · Shift+Enter 換行 · Esc 取消",
  "Tip: in any text, $x^2$ puts maths in a sentence.": "提示：在任何文字中寫 $x^2$ 即可把公式放進句子。",
  "My boards as a full page": "「我的白板」全頁顯示",
- "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "開啟（預設）：側邊顯示資料夾，彩色資料夾卡片，每個白板都有縮圖。關閉：側邊欄中的簡單清單。"
+ "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "開啟（預設）：側邊顯示資料夾，彩色資料夾卡片，每個白板都有縮圖。關閉：側邊欄中的簡單清單。",
+ "Video": "影片",
+ "Microsoft Office is not on this computer, so the usual converter was used": "這台電腦上沒有 Microsoft Office，因此使用了一般轉換器",
+ "Microsoft Office could not convert this file, so the usual converter was used": "Microsoft Office 無法轉換此檔案，因此使用了一般轉換器",
+ "Converted with Microsoft Office — reading pages…": "已使用 Microsoft Office 轉換，正在讀取頁面…",
+ "Import with Microsoft Office (beta)": "用 Microsoft Office 匯入（測試版）",
+ "Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.": "Word、Excel 和 PowerPoint 檔案會在你自己的 Microsoft Office 中於背景開啟，並儲存為 PDF 頁面 —— 與 Microsoft Whiteboard 顯示的一模一樣。速度較慢：Office 需要幾秒鐘啟動。較寬的試算表會縮放為一頁寬。如果沒有安裝 Office，則使用一般轉換器。",
+ "Animated slides come in after the last click": "動畫投影片按最後一次點擊後的樣子匯入",
+ "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "開啟（預設）：每張投影片按所有點擊完成後的樣子匯入 —— 淡出的內容消失，移動的內容停在終點，放大的內容為完整大小。關閉：第一次點擊之前的投影片，所有內容同時出現。"
 }

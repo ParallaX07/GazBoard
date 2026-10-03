@@ -116,6 +116,7 @@ export class ClassTimer {
     this.state = 'closed';
     this.picking = false;
     this.stopTicking();
+    this._endDrag?.();
     if (this.el) { this.el.remove(); this.el = null; }
   }
 
@@ -221,6 +222,7 @@ export class ClassTimer {
     const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.box.scale || 1));
     this.box.scale = s;
     el.style.transform = `scale(${s})`;
+    el.style.setProperty('--ct-s', String(s));
     const hw = this.host.clientWidth || window.innerWidth || 0;
     const hh = this.host.clientHeight || window.innerHeight || 0;
     const w = el.offsetWidth * s;
@@ -328,58 +330,98 @@ export class ClassTimer {
    * the timer by accident; a press that stays put is an ordinary click.
    */
   wireMoving(el) {
+    /*
+     * Why the corner used to be flaky, and what holds it together now:
+     *  - the moves and the release were only heard on the card itself, so a
+     *    quick tug that left the card before the first move was heard lost
+     *    the drag: the clock stopped growing, the release happened outside
+     *    and was never heard, and the drag stayed "on" - so later, just
+     *    passing the mouse over the corner went on resizing it. The moves and
+     *    the release are now heard on the whole window for as long as the
+     *    drag lasts, and a move with no button held ends a drag that lost
+     *    its release.
+     *  - the corner is grabbed with the pointer held from the very press (it
+     *    has no click to protect), and its target stays a fair size on
+     *    screen however small the clock is.
+     *  - the size follows the pointer both ways: down grows it as well as
+     *    right, so the corner stays under the pointer.
+     */
     let drag = null;
-    el.addEventListener('pointerdown', (e) => {
-      // the board underneath must not see presses meant for the clock
-      e.stopPropagation();
-      if (e.button !== 0 || (e.target instanceof Element && e.target.closest('input'))) return;
-      const resize = e.target instanceof Element && e.target.classList.contains('ct-resize');
-      drag = {
-        id: e.pointerId, x: e.clientX, y: e.clientY, resize, moved: false,
-        box: { ...this.box }, w: el.offsetWidth
-      };
-      /*
-       * NOT captured here. Capturing the pointer on the card at the press
-       * makes the card the target of the click that follows - so the click
-       * never reached Start, Pause, a preset or Close, and the clock could be
-       * started by the keyboard but never stopped. The pointer is only
-       * captured once the press has turned into a drag (below), and a drag's
-       * click is swallowed anyway.
-       */
-    });
-    el.addEventListener('pointermove', (e) => {
+    const finish = (e, cancelled) => {
+      if (!drag || (e && e.pointerId !== drag.id)) return;
+      const moved = drag.moved;
+      const id = drag.id;
+      drag = null;
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', cancel, true);
+      window.removeEventListener('blur', lost);
+      try { if (el.hasPointerCapture?.(id)) el.releasePointerCapture(id); } catch { /* never captured */ }
+      el.classList.remove('ct-sizing');
+      if (moved) {
+        if (!cancelled && e && e.type === 'pointerup') {
+          // the click that follows a drag is the end of the drag, not a press
+          const eat = (c) => { c.stopPropagation(); c.preventDefault(); };
+          el.addEventListener('click', eat, { capture: true, once: true });
+          setTimeout(() => el.removeEventListener('click', eat, { capture: true }), 0);
+        }
+        this.onPlace?.({ ...this.box });
+      }
+    };
+    const move = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
+      // the button was let go somewhere the release was not heard: that drag is over
+      if (e.pointerType === 'mouse' && e.buttons === 0) { finish(e, true); return; }
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
-      if (!drag.moved) {
+      if (!drag.moved && Math.hypot(dx, dy) < (drag.resize ? 1 : 4)) return;
+      if (!drag.moved && !drag.resize) {
         // now it is a drag: keep hold of the pointer even if it outruns the card
         try { el.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
       }
       drag.moved = true;
       if (drag.resize) {
-        const was = drag.w * drag.box.scale;
-        this.box.scale = drag.box.scale * Math.max(0.1, (was + dx) / was);
+        // the corner follows the pointer: whichever way it went further sets the size
+        const ws = drag.w * drag.box.scale, hs = drag.h * drag.box.scale;
+        const k = Math.max((ws + dx) / ws, (hs + dy) / hs);
+        this.box.scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, drag.box.scale * Math.max(0.1, k)));
       } else {
         this.box.x = drag.box.x + dx;
         this.box.y = drag.box.y + dy;
       }
       this.place();
-    });
-    const end = (e) => {
-      if (!drag || e.pointerId !== drag.id) return;
-      const moved = drag.moved;
-      drag = null;
-      try { el.releasePointerCapture(e.pointerId); } catch { /* never captured */ }
-      if (moved) {
-        // the click that follows a drag is the end of the drag, not a press
-        const eat = (c) => { c.stopPropagation(); c.preventDefault(); };
-        el.addEventListener('click', eat, { capture: true, once: true });
-        setTimeout(() => el.removeEventListener('click', eat, { capture: true }), 0);
-        this.onPlace?.({ ...this.box });
-      }
     };
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end);
+    const up = (e) => finish(e, false);
+    const cancel = (e) => finish(e, true);
+    const lost = () => finish(null, true);
+    el.addEventListener('pointerdown', (e) => {
+      // the board underneath must not see presses meant for the clock
+      e.stopPropagation();
+      if (e.button !== 0 || (e.target instanceof Element && e.target.closest('input'))) return;
+      if (drag) finish(null, true);             // a stale drag never outlives a new press
+      const resize = e.target instanceof Element && !!e.target.closest('.ct-resize');
+      drag = {
+        id: e.pointerId, x: e.clientX, y: e.clientY, resize, moved: false,
+        box: { ...this.box }, w: el.offsetWidth || 1, h: el.offsetHeight || 1
+      };
+      /*
+       * A move is NOT captured here. Capturing the pointer on the card at the
+       * press makes the card the target of the click that follows - so the
+       * click never reached Start, Pause, a preset or Close, and the clock
+       * could be started by the keyboard but never stopped. A move is only
+       * captured once the press has turned into a drag, and a drag's click
+       * is swallowed anyway. The corner has no click, so it holds on at once.
+       */
+      if (resize) {
+        e.preventDefault();
+        el.classList.add('ct-sizing');
+        try { el.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      }
+      window.addEventListener('pointermove', move, true);
+      window.addEventListener('pointerup', up, true);
+      window.addEventListener('pointercancel', cancel, true);
+      window.addEventListener('blur', lost);
+    });
+    this._endDrag = () => finish(null, true);
   }
 }
 

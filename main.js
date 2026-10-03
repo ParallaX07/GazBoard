@@ -517,6 +517,7 @@ function buildMenu() {
  *  LibreOffice discovery (best-fidelity Office conversion path)
  * ------------------------------------------------------------------ */
 const { resolveSoffice } = require('./soffice.js');
+const { convertWithMsOffice } = require('./msoffice.js');
 /*
  * Probed once and remembered: the search touches the filesystem a few dozen
  * times and the answer cannot change while the app is open. Installing
@@ -566,7 +567,7 @@ async function convertWithSoffice(filePath) {
  *  Fallback conversion: hidden window renders the file to HTML
  *  (mammoth for .docx, built-in OOXML reader for .pptx) then printToPDF
  * ------------------------------------------------------------------ */
-function convertWithHiddenWindow(filePath, kind) {
+function convertWithHiddenWindow(filePath, kind, { finalLook = true } = {}) {
   return new Promise((resolve, reject) => {
     const token = 'cv' + Date.now() + Math.random().toString(36).slice(2);
     const win = new BrowserWindow({
@@ -590,7 +591,7 @@ function convertWithHiddenWindow(filePath, kind) {
     ipcMain.on('convert:ready', onReady);
     ipcMain.on('convert:error', onError);
     setTimeout(() => done(reject, new Error('Conversion timed out')), 120000);
-    const q = new URLSearchParams({ token, kind, file: filePath });
+    const q = new URLSearchParams({ token, kind, file: filePath, finalLook: finalLook ? '1' : '0' });
     win.loadURL('app://board/convert.html?' + q.toString());
   });
 }
@@ -1054,7 +1055,7 @@ function ipc() {
     }
   });
 
-  ipcMain.handle('import:toPdf', async (_e, filePath) => {
+  ipcMain.handle('import:toPdf', async (_e, filePath, opts = {}) => {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.pdf') {
       const b = await fsp.readFile(filePath);
@@ -1063,19 +1064,48 @@ function ipc() {
     const office = ['.doc', '.docx', '.rtf', '.odt', '.ppt', '.pptx', '.odp', '.xls', '.xlsx', '.ods', '.txt'];
     if (!office.includes(ext)) return { ok: false, error: 'Unsupported file type: ' + ext };
 
-    const viaOffice = await convertWithSoffice(filePath);
-    if (viaOffice) return { ok: true, engine: 'libreoffice', data: viaOffice.buffer.slice(viaOffice.byteOffset, viaOffice.byteOffset + viaOffice.byteLength), name: path.basename(filePath) };
-
-    const kind = ['.docx', '.doc', '.odt', '.rtf', '.txt'].includes(ext) ? 'word'
-      : ['.pptx', '.ppt', '.odp'].includes(ext) ? 'slides' : null;
-    if (!kind) return { ok: false, error: 'Install LibreOffice to import ' + ext + ' files.' };
-    if (ext === '.doc' || ext === '.ppt' || ext === '.odt' || ext === '.odp')
-      return { ok: false, error: 'Legacy/ODF formats need LibreOffice installed. Save as .docx / .pptx and try again.' };
+    /*
+     * A deck whose blank video stills or empty GIF frames were fixed up by the
+     * page arrives as bytes: it is written next to nothing of the person's,
+     * under the same name (converters title the pages after it), converted,
+     * and thrown away. The original file is never touched.
+     */
+    let source = filePath, scratch = null;
+    if (opts.bytes && opts.bytes.byteLength) {
+      scratch = await fsp.mkdtemp(path.join(os.tmpdir(), 'gazboard-src-'));
+      source = path.join(scratch, path.basename(filePath));
+      await fsp.writeFile(source, Buffer.from(opts.bytes.buffer || opts.bytes, opts.bytes.byteOffset || 0, opts.bytes.byteLength));
+    }
+    const pack = (buf, engine, extra = {}) => ({ ok: true, engine, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), name: path.basename(filePath), ...extra });
     try {
-      const pdf = await convertWithHiddenWindow(filePath, kind);
-      return { ok: true, engine: 'builtin', data: pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength), name: path.basename(filePath) };
-    } catch (e) {
-      return { ok: false, error: e.message };
+      // Microsoft Office first, when it was asked for (Settings, Windows only)
+      let officeNote = null;
+      if (opts.office && process.platform === 'win32') {
+        try {
+          const pdf = await convertWithMsOffice(source, { fitWide: opts.fitWide !== false });
+          return pack(pdf, 'msoffice');
+        } catch (e) {
+          console.warn('[import] Microsoft Office conversion failed:', e.code, e.message);
+          officeNote = e.code === 'absent' ? 'absent' : 'failed';
+        }
+      }
+
+      const viaOffice = await convertWithSoffice(source);
+      if (viaOffice) return pack(viaOffice, 'libreoffice', { officeNote });
+
+      const kind = ['.docx', '.doc', '.odt', '.rtf', '.txt'].includes(ext) ? 'word'
+        : ['.pptx', '.ppt', '.odp'].includes(ext) ? 'slides' : null;
+      if (!kind) return { ok: false, error: 'Install LibreOffice to import ' + ext + ' files.', officeNote };
+      if (ext === '.doc' || ext === '.ppt' || ext === '.odt' || ext === '.odp')
+        return { ok: false, error: 'Legacy/ODF formats need LibreOffice installed. Save as .docx / .pptx and try again.', officeNote };
+      try {
+        const pdf = await convertWithHiddenWindow(source, kind, { finalLook: opts.finalLook !== false });
+        return pack(pdf, 'builtin', { officeNote });
+      } catch (e) {
+        return { ok: false, error: e.message, officeNote };
+      }
+    } finally {
+      if (scratch) fsp.rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
   });
 }

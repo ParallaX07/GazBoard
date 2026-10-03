@@ -69,6 +69,8 @@ const PRECACHE_ASSETS = [
   './js/core/version.js',
   './js/importers/pdf.js',
   './js/importers/pptx.js',
+  './js/importers/slidemedia.js',
+  './js/importers/slideanim.js',
   './js/ui/contextmenu.js',
   './js/ui/icons.js',
   './js/ui/pagepicker.js',

@@ -4253,6 +4253,277 @@ async function run(win, app) {
   `);
   check('PowerPoint import adds slides', pptx.added === 3, pptx.added + ' slides');
 
+  /*
+   * Slides with a video or an animated GIF. A clip's still (its "poster") is
+   * often its first frame, and a clip that fades in from black has a black
+   * one; an animation that builds itself up starts from an empty frame. On
+   * the board those were a black box and nothing at all, in front of a class.
+   * The fixture has: slide 1, a plain black picture (must stay black - it is
+   * a picture, not a clip) and a video whose still is that same black image;
+   * slide 2, a GIF that starts blank and builds up bars, and a GIF whose
+   * first frame already shows the bars (must be left alone).
+   */
+  const clips = await js(`
+    const { fixDeckBytes, busyness } = await import('app://board/js/importers/slidemedia.js');
+    const bytes = await window.board.readFile(${JSON.stringify(path.join(FIX, 'clips-and-gifs.pptx'))});
+    const { bytes: fixed, report } = await fixDeckBytes(bytes);
+    const r = { report, fixed: !!fixed };
+    if (!fixed) return r;
+    const zip = await window.JSZip.loadAsync(fixed);
+    const rels = async (n) => {
+      const x = new DOMParser().parseFromString(await zip.file('ppt/slides/_rels/slide' + n + '.xml.rels').async('string'), 'application/xml');
+      const m = {}; for (const e of x.getElementsByTagName('Relationship')) m[e.getAttribute('Id')] = e.getAttribute('Target'); return m;
+    };
+    const pics = async (n) => {
+      const x = new DOMParser().parseFromString(await zip.file('ppt/slides/slide' + n + '.xml').async('string'), 'application/xml');
+      const m = await rels(n);
+      return [...x.getElementsByTagNameNS('*', 'pic')].map((p) => {
+        const b = p.getElementsByTagNameNS('*', 'blip')[0];
+        const id = b.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
+        return { name: p.getElementsByTagNameNS('*', 'cNvPr')[0].getAttribute('name'), target: m[id] };
+      });
+    };
+    const score = async (target) => {
+      const f = zip.file('ppt/media/' + target.split('/').pop());
+      if (!f) return -1;
+      const ext = target.split('.').pop();
+      const bmp = await createImageBitmap(new Blob([await f.async('uint8array')], { type: ext === 'gif' ? 'image/gif' : 'image/png' }));
+      return +busyness(bmp).toFixed(1);
+    };
+    r.slide1 = await pics(1); r.slide2 = await pics(2);
+    for (const p of [...r.slide1, ...r.slide2]) p.busy = await score(p.target);
+    r.pngType = /Extension="png"/i.test(await zip.file('[Content_Types].xml').async('string'));
+    r.reopens = !!(await window.JSZip.loadAsync(fixed)).file('ppt/presentation.xml');
+    return r;
+  `);
+  const s1 = clips.slide1 || [], s2 = clips.slide2 || [];
+  const plain = s1.find((p) => p.name === 'Picture 4'), clipPic = s1.find((p) => p.name === 'clip.mp4');
+  const build = s2[0], ready = s2[1];
+  check('a video whose still is a black frame gets a frame from the clip; a plain black picture stays as it is',
+    clips.fixed && clipPic && clipPic.busy >= 6 && /gazboard-still/.test(clipPic.target) && plain && plain.busy < 6 && /image1\.png$/.test(plain.target),
+    `report ${JSON.stringify(clips.report)}; slide 1 pictures ${JSON.stringify(s1)}`);
+  check('a GIF that starts blank shows its finished frame; a GIF that already shows something is left alone',
+    build && build.busy >= 6 && /gazboard-still/.test(build.target) && ready && /\.gif$/.test(ready.target) && clips.report?.changed === 2,
+    `slide 2 pictures ${JSON.stringify(s2)}; changed ${clips.report?.changed}`);
+  check('the fixed deck is still a deck PowerPoint and LibreOffice can open',
+    clips.pngType && clips.reopens, `png declared: ${clips.pngType}, reopens: ${clips.reopens}`);
+
+  // all the way through: imported, the clip's corner of the slide is not a black box any more
+  const clipsOnBoard = await js(`
+    const { insertDocument } = await import('app://board/js/insert.js');
+    const { busyness } = await import('app://board/js/importers/slidemedia.js');
+    const a = window.app;
+    const objs = await insertDocument(a, ${JSON.stringify(path.join(FIX, 'clips-and-gifs.pptx'))}, { pages: [1, 2], layout: 'row' });
+    if (!objs) return { objs: 0 };
+    const region = async (o, fx, fy, fw, fh) => {
+      const img = new Image(); img.src = o.src; await img.decode();
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      const x = Math.round(fx * c.width), y = Math.round(fy * c.height), w = Math.round(fw * c.width), h = Math.round(fh * c.height);
+      const d = g.getImageData(x, y, w, h).data; let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+      const cut = document.createElement('canvas'); cut.width = w; cut.height = h; cut.getContext('2d').drawImage(c, x, y, w, h, 0, 0, w, h);
+      return { mean: Math.round(sum / (d.length / 4)), busy: +busyness(cut).toFixed(1) };
+    };
+    // the clip sits at 8in-11in across, 4.2in-6.4in down, of a 13.33in x 7.5in slide; the blank-start GIF at 1-5in, 2-5in
+    const r = {
+      objs: objs.length,
+      clip: await region(objs[0], 8.1 / 13.333, 4.3 / 7.5, 2.8 / 13.333, 2.0 / 7.5),
+      plain: await region(objs[0], 1.1 / 13.333, 4.3 / 7.5, 2.8 / 13.333, 2.0 / 7.5),
+      gif: objs[1] ? await region(objs[1], 1.1 / 13.333, 2.1 / 7.5, 3.8 / 13.333, 2.8 / 7.5) : null
+    };
+    a.store.remove(objs.map((o) => o.id), 'test cleanup');
+    return r;
+  `);
+  check('imported, the video shows a picture instead of a black box, and the GIF shows its bars',
+    clipsOnBoard.objs === 2 && clipsOnBoard.clip.busy >= 6 && clipsOnBoard.plain.mean < 30 && clipsOnBoard.gif && clipsOnBoard.gif.busy >= 6,
+    JSON.stringify(clipsOnBoard));
+
+  // the built-in reader (no LibreOffice, Android, the web app) does the same on its own
+  const clipsBuiltin = await js(`
+    const { pptxToSlides } = await import('app://board/js/importers/pptx.js');
+    const bytes = await window.board.readFile(${JSON.stringify(path.join(FIX, 'clips-and-gifs.pptx'))});
+    const { slides } = await pptxToSlides(bytes);
+    const srcs = (html) => [...html.matchAll(/src="(data:[^"]+)"/g)].map((m) => m[1]);
+    const one = srcs(slides[0]);
+    return { slides: slides.length, pictures: one.length, distinct: new Set(one).size };
+  `);
+  check('the built-in converter swaps the black video still too',
+    clipsBuiltin.slides === 2 && clipsBuiltin.pictures === 2 && clipsBuiltin.distinct === 2,
+    `${JSON.stringify(clipsBuiltin)} — slide 1 must carry the black picture AND a different still for the clip`);
+
+  /*
+   * Animated slides come in the way they look after the last click. The
+   * fixture's first slide: an arrow that grows to 150%, a box that fades out,
+   * a box that leaves and comes back, a ball that travels down 0.4 of the
+   * slide along a curve, a bar that spins a quarter turn, a text box whose
+   * second line leaves (the box stays), and a title (placed by the layout,
+   * not the slide) that slides right by 0.1. The second slide has no
+   * animations and must come through untouched.
+   */
+  const anim = await js(`
+    const { fixDeckBytes } = await import('app://board/js/importers/slidemedia.js');
+    const bytes = await window.board.readFile(${JSON.stringify(path.join(FIX, 'animated-slides.pptx'))});
+    const W = 12192000, H = 6858000;
+    const read = async (b) => {
+      const zip = await window.JSZip.loadAsync(b);
+      const x = new DOMParser().parseFromString(await zip.file('ppt/slides/slide1.xml').async('string'), 'application/xml');
+      const x2 = await zip.file('ppt/slides/slide2.xml').async('string');
+      const shape = (id) => {
+        const c = [...x.getElementsByTagNameNS('*', 'cNvPr')].find((e) => e.getAttribute('id') === String(id));
+        if (!c) return null;
+        const sp = c.parentNode.parentNode;
+        const xf = sp.getElementsByTagNameNS('*', 'xfrm')[0];
+        const off = xf?.getElementsByTagNameNS('*', 'off')[0], ext = xf?.getElementsByTagNameNS('*', 'ext')[0];
+        return xf ? { x: +off.getAttribute('x'), y: +off.getAttribute('y'), w: +ext.getAttribute('cx'), h: +ext.getAttribute('cy'), rot: +(xf.getAttribute('rot') || 0) } : { noFrame: true };
+      };
+      return { arrow: shape(3), gone: shape(4), back: shape(5), ball: shape(6), spin: shape(7), txt: shape(8), title: shape(2),
+               timing: !!x.getElementsByTagNameNS('*', 'timing').length, slide2: x2 };
+    };
+    const before = await read(bytes);
+    const { bytes: fixed, animations } = await fixDeckBytes(bytes);
+    const after = fixed ? await read(fixed) : null;
+    const off = await fixDeckBytes(bytes, { finalLook: false });
+    return { W, H, before, after, animations, offBytes: !!off.bytes, sameSlide2: after ? after.slide2 === before.slide2 : null };
+  `);
+  {
+    const b = anim.before || {}, a = anim.after || {};
+    const near = (p, q) => Math.abs(p - q) <= 2;
+    const grew = a.arrow && near(a.arrow.w, b.arrow.w * 1.5) && near(a.arrow.h, b.arrow.h * 1.5) &&
+      near(a.arrow.x + a.arrow.w / 2, b.arrow.x + b.arrow.w / 2) && near(a.arrow.y + a.arrow.h / 2, b.arrow.y + b.arrow.h / 2);
+    check('after the last click: what fades out is gone, and what leaves and comes back is there',
+      a.gone === null && !!a.back && !a.back.noFrame && !!a.txt,
+      `faded box: ${JSON.stringify(a.gone)} (wanted gone); came back: ${JSON.stringify(a.back)}; text box whose second line leaves: ${JSON.stringify(a.txt)} (wanted kept)`);
+    check('what travels is where its path ends, what grows is full size about its middle, what spins is turned',
+      a.ball && near(a.ball.y, b.ball.y + 0.4 * anim.H) && near(a.ball.x, b.ball.x) && grew && a.spin && a.spin.rot === 5400000,
+      `ball y ${b.ball?.y} → ${a.ball?.y} (wanted +${0.4 * anim.H}); arrow ${JSON.stringify(b.arrow)} → ${JSON.stringify(a.arrow)}; ` +
+      `spin rot ${a.spin?.rot} (wanted 5400000); report ${JSON.stringify(anim.animations)}`);
+    check('a title placed by the layout still moves: its place is copied onto the slide first',
+      b.title && b.title.noFrame && a.title && !a.title.noFrame && a.title.x > 0.1 * anim.W,
+      `before ${JSON.stringify(b.title)}, after ${JSON.stringify(a.title)}`);
+    check('the animations are spent, an unanimated slide is untouched, and switched off nothing changes',
+      b.timing === true && a.timing === false && anim.sameSlide2 === true && anim.offBytes === false,
+      `animations left on slide 1: ${a.timing}; slide 2 unchanged: ${anim.sameSlide2}; with the setting off a new deck was made: ${anim.offBytes}`);
+  }
+
+  // all the way through, both ways round, read off the imported pictures
+  const animBoard = await js(`
+    const { insertDocument } = await import('app://board/js/insert.js');
+    const a = window.app;
+    const was = a.settings.slidesFinalLook;
+    const look = async (finalLook) => {
+      a.settings.slidesFinalLook = finalLook;
+      const objs = await insertDocument(a, ${JSON.stringify(path.join(FIX, 'animated-slides.pptx'))}, { pages: [1], layout: 'row' });
+      if (!objs) return null;
+      const img = new Image(); img.src = objs[0].src; await img.decode();
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // the colour in the middle of where something is, in slide inches
+      const at = (ix, iy) => { const d = g.getImageData(Math.round(ix / 13.333 * c.width), Math.round(iy / 7.5 * c.height), 1, 1).data; return [d[0], d[1], d[2]]; };
+      const r = { fadedBox: at(5.75, 2.6), ballStart: at(9.75, 2.25), ballEnd: at(9.75, 2.25 + 3.0), cameBack: at(5.75, 4.6) };
+      a.store.remove(objs.map((o) => o.id), 'test cleanup');
+      return r;
+    };
+    const r = { after: await look(true), before: await look(false) };
+    a.settings.slidesFinalLook = was;
+    return r;
+  `);
+  {
+    const white = (c) => !!c && c.every((v) => v > 235);
+    const red = (c) => !!c && c[0] > 150 && c[1] < 90;
+    const blue = (c) => !!c && c[2] > 150 && c[0] < 90;
+    const green = (c) => !!c && c[1] > 120 && c[0] < 90;
+    const A = animBoard.after || {}, B = animBoard.before || {};
+    check('imported, the slide is its after-the-last-click self: the faded box gone, the ball at the bottom of its path',
+      white(A.fadedBox) && white(A.ballStart) && blue(A.ballEnd) && green(A.cameBack),
+      `faded box spot ${A.fadedBox} (wanted white), ball start ${A.ballStart} (wanted white), ball end ${A.ballEnd} (wanted blue), came back ${A.cameBack} (wanted green)`);
+    check('with the setting off it comes in as before the first click, everything at once',
+      red(B.fadedBox) && blue(B.ballStart) && white(B.ballEnd),
+      `faded box spot ${B.fadedBox} (wanted red), ball start ${B.ballStart} (wanted blue), ball end ${B.ballEnd} (wanted white)`);
+  }
+
+  const animBuiltin = await js(`
+    const { pptxToSlides } = await import('app://board/js/importers/pptx.js');
+    const bytes = await window.board.readFile(${JSON.stringify(path.join(FIX, 'animated-slides.pptx'))});
+    const on = await pptxToSlides(bytes);
+    const off = await pptxToSlides(bytes, { finalLook: false });
+    const shapes = (html) => (html.match(/class="sh"/g) || []).length;
+    return { on: shapes(on.slides[0]), off: shapes(off.slides[0]), redBox: /background:#C82828/i.test(on.slides[1]),
+             outlineless: (on.slides[1].match(/<div class="sh" style="[^"]*background:#C82828[^"]*"/i) || [''])[0] };
+  `);
+  check('the built-in converter (no LibreOffice, and the phone app) gives the same final look',
+    animBuiltin.off - animBuiltin.on === 1,
+    `shapes drawn on slide 1: ${animBuiltin.on} with the final look, ${animBuiltin.off} without — wanted exactly the faded box fewer`);
+  check('the built-in converter draws a filled shape that has no outline (it used to vanish)',
+    animBuiltin.redBox && !/border:/.test(animBuiltin.outlineless),
+    `red box on slide 2: ${animBuiltin.redBox}; its style: ${animBuiltin.outlineless || 'not drawn'} — "no outline" was read as "no fill"`);
+
+  // On a dark board the default ink is drawn light, so the selection's colour dot must say so too
+  const darkDot = await js(`
+    const a = window.app;
+    const theme = a.settings.theme;
+    a.settings.theme = 'dark'; a.applyTheme();
+    const c = a.surface.cam.viewport(a.surface.width, a.surface.height);
+    const m = await a.commitMath({ at: { x: c.x + 300, y: c.y + 200 } }, 'x^2');
+    a.store.add({ id: 'dd-t', type: 'text', x: c.x + 300, y: c.y + 400, w: 200, h: 60, rotation: 0, fontSize: 24, color: '#201f1e', text: 'hello' }, 'a');
+    const read = async (id) => {
+      a.setSelection([id]);
+      await new Promise((r) => setTimeout(r, 80));
+      const dot = document.querySelector('.colour-btn span');
+      return dot ? dot.dataset.colour : null;
+    };
+    const r = { math: await read(m.id), text: await read('dd-t') };
+    // already selected when the theme flips: the dot follows without reselecting
+    a.settings.theme = 'light'; a.applyTheme();
+    r.flipLight = document.querySelector('.colour-btn span')?.dataset.colour;
+    a.settings.theme = 'dark'; a.applyTheme();
+    r.flipDark = document.querySelector('.colour-btn span')?.dataset.colour;
+    document.querySelector('.colour-btn')?.click();
+    await new Promise((r) => setTimeout(r, 80));
+    const first = document.querySelector('.swatches .sw');
+    r.swatch = first ? getComputedStyle(first).backgroundColor : null;
+    r.ringed = first ? first.classList.contains('sw-adaptive') : null;
+    const { closePopover } = await import('app://board/js/ui/popover.js'); closePopover();
+    a.setSelection([]);
+    a.settings.theme = 'light'; a.applyTheme();
+    r.lightMath = await read(m.id);
+    a.setSelection([]);
+    a.settings.theme = theme; a.applyTheme();
+    a.store.remove([m.id, 'dd-t'], 'test cleanup');
+    return r;
+  `);
+  {
+    const light = (c) => /^#([0-9a-f]{6})$/i.test(c || '') && parseInt(c.slice(1, 3), 16) > 180;
+    check('on a dark board, the colour dot of default-ink maths and text shows the light ink they are drawn in',
+      light(darkDot.math) && light(darkDot.text) && darkDot.lightMath === '#201f1e' && darkDot.flipLight === '#201f1e' && light(darkDot.flipDark) && darkDot.ringed === true && /rgb\((2[0-5]\d|1[89]\d)/.test(darkDot.swatch || ''),
+      `dark: maths dot ${darkDot.math}, text dot ${darkDot.text}; theme flipped while selected: light ${darkDot.flipLight}, dark ${darkDot.flipDark}; first swatch ${darkDot.swatch} (ringed ${darkDot.ringed}); light: maths dot ${darkDot.lightMath}`);
+  }
+
+  const officeRow = await js(`
+    const a = window.app;
+    const was = a.settings.officeImport;
+    window.__gazboardShowOfficeRow = true;
+    a.panels.close();
+    await new Promise((r) => setTimeout(r, 200));
+    a.panels.settings();
+    await new Promise((r) => setTimeout(r, 120));
+    const label = [...document.querySelectorAll('#panelBody span')].find((e) => e.textContent.includes('Microsoft Office (beta)'));
+    const box = label?.parentElement?.querySelector('input[type=checkbox]');
+    const anim = [...document.querySelectorAll('#panelBody span')].find((e) => e.textContent.includes('after the last click'));
+    const animBox = anim?.parentElement?.querySelector('input[type=checkbox]');
+    const r = { found: !!label, animRow: !!anim, animOn: animBox ? animBox.checked : null, animDefault: a.settings.slidesFinalLook, defaultOff: was === false, startsUnticked: box ? !box.checked : null };
+    if (box) { box.click(); r.afterTick = a.settings.officeImport; box.click(); r.afterUntick = a.settings.officeImport; }
+    window.__gazboardShowOfficeRow = false;
+    a.panels.close();
+    a.settings.officeImport = was; a.saveSettings();
+    return r;
+  `);
+  check('Settings has the after-the-last-click switch, on from the start',
+    officeRow.animRow && officeRow.animOn === true && officeRow.animDefault === true, JSON.stringify(officeRow));
+  check('Settings has the Microsoft Office import switch, off until someone turns it on',
+    officeRow.found && officeRow.defaultOff && officeRow.startsUnticked === true && officeRow.afterTick === true && officeRow.afterUntick === false,
+    JSON.stringify(officeRow));
+
   const ranges = await js(`
     const { parseRange, formatRange } = await import('app://board/js/ui/pagepicker.js');
     return {
@@ -11843,15 +12114,55 @@ module.exports.run = async (win, app) => {
     if (d.missing) log.push('no running clock to drag');
     win.webContents.sendInputEvent({ type: 'mouseMove', x: d.x, y: d.y });
     win.webContents.sendInputEvent({ type: 'mouseDown', x: d.x, y: d.y, button: 'left', clickCount: 1 });
-    for (let i = 1; i <= 8; i++) { win.webContents.sendInputEvent({ type: 'mouseMove', x: d.x + i * 15, y: d.y + i * 5, button: 'left' }); await sleep(16); }
+    for (let i = 1; i <= 8; i++) { win.webContents.sendInputEvent({ type: 'mouseMove', x: d.x + i * 15, y: d.y + i * 5, button: 'left', modifiers: ['leftButtonDown'] }); await sleep(16); }
     win.webContents.sendInputEvent({ type: 'mouseUp', x: d.x + 120, y: d.y + 40, button: 'left', clickCount: 1 });
     await sleep(150);
     const dragged = await state();
     log.push(`drag by the digits → moved ${dragged.x - before.x},${dragged.y - before.y}, ${dragged.state}`);
+    // a real tug on the corner: a quick jump well off the card, released out there, then the mouse wanders back over it
+    const sizeLog = [];
+    const scaleNow = () => js(`return +window.app.timer.box.scale.toFixed(3)`);
+    await js(`const t = window.app.timer; t.box = { ...t.box, x: 40, y: 60, scale: 1 }; t.place();`);
+    await sleep(60);
+    let g = await where('#classTimer .ct-resize');
+    const s1 = await scaleNow();
+    if (g) {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: g.x, y: g.y });
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: g.x, y: g.y, button: 'left', clickCount: 1 });
+      await sleep(30);
+      // one big jump, far outside the card, before any small move is seen
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: g.x + 260, y: g.y + 40, button: 'left', modifiers: ['leftButtonDown'] }); await sleep(30);
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: g.x + 300, y: g.y + 60, button: 'left', modifiers: ['leftButtonDown'] }); await sleep(30);
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: g.x + 300, y: g.y + 60, button: 'left', clickCount: 1 });
+      await sleep(60);
+    } else sizeLog.push('no corner found');
+    const s2 = await scaleNow();
+    // the button is up: wandering back across the corner must not size it
+    const g2 = (await where('#classTimer .ct-resize')) || { x: 0, y: 0 };
+    for (let i = 0; i <= 6; i++) { win.webContents.sendInputEvent({ type: 'mouseMove', x: g2.x + 40 - i * 10, y: g2.y + 30 - i * 8 }); await sleep(16); }
+    await sleep(40);
+    const s3 = await scaleNow();
+    // straight down grows it too, and a second tug works as well as the first
+    g = await where('#classTimer .ct-resize');
+    if (g) {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: g.x, y: g.y });
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: g.x, y: g.y, button: 'left', clickCount: 1 });
+      for (let i = 1; i <= 5; i++) { win.webContents.sendInputEvent({ type: 'mouseMove', x: g.x, y: g.y + i * 20, button: 'left', modifiers: ['leftButtonDown'] }); await sleep(16); }
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: g.x, y: g.y + 100, button: 'left', clickCount: 1 });
+      await sleep(60);
+    }
+    const s4 = await scaleNow();
+    const gripPx = await js(`const r = document.querySelector('#classTimer .ct-resize')?.getBoundingClientRect(); return r ? Math.round(r.width) : 0;`);
+    const stillTiming = (await state()).state;
+    sizeLog.push(`scale ${s1} → after a quick tug off the card ${s2} → after the mouse wandered back with no button ${s3} → after a tug straight down ${s4}; corner ${gripPx}px on screen; clock ${stillTiming}`);
+    await js(`const t = window.app.timer; t.box = { ...t.box, scale: 1 }; t.place();`);
     const closed = await step('press close', () => press('#classTimer .ct-close'));
     await js(`const t = window.app.timer; t.box = { x: 16, y: 14, scale: 1 }; window.app.settings.timerBox = { ...t.box };`);
 
-    check('the clock’s buttons answer a real mouse, not just a scripted click',
+      check('the clock’s corner holds on through a quick tug, lets go on release, and grows downwards too',
+      s2 > s1 + 0.3 && Math.abs(s3 - s2) < 0.001 && s4 > s3 + 0.1 && gripPx >= 18 && stillTiming === 'running',
+      sizeLog.join('; '));
+  check('the clock’s buttons answer a real mouse, not just a scripted click',
       preset.state === 'running' && paused.state === 'paused' && resumed.state === 'running' &&
       more.left > 300 && listing.picking && listing.state === 'running' && closed.state === 'closed',
       log.join('; '));
@@ -11948,6 +12259,57 @@ module.exports.run = async (win, app) => {
     check('and it covers every other drive, both layouts',
       list.filter((c) => /^[C-Z]:/i.test(c)).length === 24 * 3,
       `${list.filter((c) => /^[C-Z]:/i.test(c)).length} drive path(s), wanted ${24 * 3} (24 letters x 3 shapes)`);
+  }
+
+  /*
+   * Microsoft Office as the converter (Windows, beta, off by default). Office
+   * itself cannot run here, so PowerShell is stood in for: what the app asks
+   * of it, and what it does with each answer, are what is checked.
+   */
+  {
+    const { convertWithMsOffice, officeApp, OFFICE_SCRIPT } = require('../msoffice.js');
+    const { EventEmitter } = require('node:events');
+    const fakeShell = (behave) => {
+      const calls = [];
+      const run = (cmd, args) => {
+        calls.push({ cmd, args });
+        const child = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setTimeout(() => {
+          const at = (flag) => args[args.indexOf(flag) + 1];
+          if (behave === 'ok') require('node:fs').writeFileSync(at('-Out'), '%PDF-1.4 pretend');
+          if (behave === 'absent') child.stderr.emit('data', 'not installed: class not registered');
+          if (behave === 'broken') child.stderr.emit('data', 'could not convert: the file is corrupt');
+          if (behave !== 'hang') child.emit('close', behave === 'absent' ? 3 : behave === 'broken' ? 4 : 0);
+        }, 5);
+        return child;
+      };
+      return { run, calls };
+    };
+    const word = path.join(FIX, 'sample.docx');
+    const ok = fakeShell('ok');
+    const pdf = await convertWithMsOffice(word, { platform: 'win32', run: ok.run }).catch((e) => e);
+    const a0 = ok.calls[0]?.args || [];
+    check('with Office there, a Word file is handed to Word through PowerShell and the PDF comes back',
+      Buffer.isBuffer(pdf) && pdf.toString().startsWith('%PDF') && ok.calls[0]?.cmd === 'powershell.exe' &&
+      a0[a0.indexOf('-Kind') + 1] === 'word' && a0[a0.indexOf('-In') + 1] === word && a0.includes('-NonInteractive'),
+      `got ${Buffer.isBuffer(pdf) ? pdf.length + ' bytes' : pdf?.message}; ran ${ok.calls[0]?.cmd} ${a0.join(' ')}`);
+    const kinds = ['.docx', '.rtf', '.xlsx', '.xls', '.csv', '.pptx', '.ppt', '.pdf', '.png'].map((e) => `${e}:${officeApp(e)}`).join(' ');
+    check('each kind of file goes to the Office program that makes it',
+      kinds === '.docx:word .rtf:word .xlsx:excel .xls:excel .csv:excel .pptx:powerpoint .ppt:powerpoint .pdf:null .png:null', kinds);
+    const absent = await convertWithMsOffice(word, { platform: 'win32', run: fakeShell('absent').run }).catch((e) => e);
+    const broken = await convertWithMsOffice(word, { platform: 'win32', run: fakeShell('broken').run }).catch((e) => e);
+    const hang = await convertWithMsOffice(word, { platform: 'win32', run: fakeShell('hang').run, timeoutMs: 60 }).catch((e) => e);
+    const linux = await convertWithMsOffice(word, { platform: 'linux', run: ok.run }).catch((e) => e);
+    check('no Office, a file Office cannot open, or Office stuck each say so, so the usual converter can take over',
+      absent.code === 'absent' && broken.code === 'failed' && /corrupt/.test(broken.message) && hang.code === 'timeout' && linux.code === 'unsupported',
+      `absent → ${absent.code}, broken → ${broken.code} (${broken.message}), stuck → ${hang.code}, not Windows → ${linux.code}`);
+    check('the Office script opens the file read-only and never closes an Office that has someone’s work in it',
+      /Documents\.Open\(\$In, \$false, \$true/.test(OFFICE_SCRIPT) && /Workbooks\.Open\(\$In, 0, \$true\)/.test(OFFICE_SCRIPT) &&
+      /Presentations\.Open\(\$In, -1/.test(OFFICE_SCRIPT) && /if \(\$left -eq 0\) \{ \$app\.Quit\(\) \}/.test(OFFICE_SCRIPT) &&
+      !/\.Save\(\)/.test(OFFICE_SCRIPT) && /FitToPagesWide = 1/.test(OFFICE_SCRIPT),
+      'read-only opens, a guarded Quit, no plain Save, wide sheets fitted across — one of these is missing from OFFICE_SCRIPT');
   }
 
   /* ---- the app in other languages ---- */

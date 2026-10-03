@@ -989,5 +989,13 @@
  "Enter to finish · Shift+Enter for a new line · Esc to cancel": "শেষ করতে Enter · নতুন লাইনে Shift+Enter · বাতিল করতে Esc",
  "Tip: in any text, $x^2$ puts maths in a sentence.": "টিপ: যেকোনো লেখায় $x^2$ লিখলে বাক্যের মধ্যে ম্যাথ বসে যায়।",
  "My boards as a full page": "আমার বোর্ড পুরো পাতায়",
- "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "চালু (ডিফল্ট): পাশে ফোল্ডারের তালিকা, রঙিন ফোল্ডার আর প্রতিটি বোর্ডের ছবি। বন্ধ: সাইড প্যানেলে সাধারণ তালিকা।"
+ "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "চালু (ডিফল্ট): পাশে ফোল্ডারের তালিকা, রঙিন ফোল্ডার আর প্রতিটি বোর্ডের ছবি। বন্ধ: সাইড প্যানেলে সাধারণ তালিকা।",
+ "Video": "ভিডিও",
+ "Microsoft Office is not on this computer, so the usual converter was used": "এই কম্পিউটারে Microsoft Office নেই, তাই সাধারণ কনভার্টার ব্যবহার করা হয়েছে",
+ "Microsoft Office could not convert this file, so the usual converter was used": "Microsoft Office এই ফাইলটি কনভার্ট করতে পারেনি, তাই সাধারণ কনভার্টার ব্যবহার করা হয়েছে",
+ "Converted with Microsoft Office — reading pages…": "Microsoft Office দিয়ে কনভার্ট হয়েছে — পেজ পড়া হচ্ছে…",
+ "Import with Microsoft Office (beta)": "Microsoft Office দিয়ে ইমপোর্ট (বেটা)",
+ "Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.": "Word, Excel আর PowerPoint ফাইল আপনার নিজের Microsoft Office-এ চোখের আড়ালে খুলে PDF পেজ হিসেবে সেভ করা হয় — হুবহু কপি, ঠিক যেমন Microsoft Whiteboard দেখায়। একটু ধীর: Office চালু হতে কয়েক সেকেন্ড লাগে। চওড়া স্প্রেডশিট আড়াআড়ি এক পেজে বসানো হয়। Office ইনস্টল না থাকলে সাধারণ কনভার্টার ব্যবহার হয়।",
+ "Animated slides come in after the last click": "অ্যানিমেটেড স্লাইড আসবে শেষ ক্লিকের পরের চেহারায়",
+ "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "চালু (ডিফল্ট): প্রতিটি স্লাইড আসে সব ক্লিক শেষ হলে যেমন দেখায় তেমন — যা ফেড হয়ে চলে যায় তা থাকে না, যা সরে তা থামার জায়গায় থাকে, যা বড় হয় তা পুরো মাপে থাকে। বন্ধ: প্রথম ক্লিকের আগের স্লাইড, সবকিছু একসাথে।"
 }

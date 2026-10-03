@@ -4,6 +4,7 @@ import { pageRects, pageIndexForBox, offsetIntoRect, nearestPageIndex } from './
 import { uid } from './core/util.js';
 import { boundsOf } from './core/store.js';
 import { openPdf } from './importers/pdf.js';
+import { fixDeckBytes } from './importers/slidemedia.js';
 import { choosePages } from './ui/pagepicker.js';
 import { t } from './i18n.js';
 
@@ -226,10 +227,30 @@ export async function insertDocument(app, filePath, opts = {}) {
   const progress = app.showProgress(t('Importing {name}', { name }), t('Converting document…'));
   let doc = null;
   try {
-    const res = await window.board.importToPdf(filePath);
+    const how = {};
+    if (window.board.importTakesBytes) {
+      // Microsoft Office does the converting when that was switched on (Windows; Settings)
+      if (app.settings.officeImport === true) how.office = true;
+      how.finalLook = app.settings.slidesFinalLook !== false;
+      // a slide's blank video still or empty GIF frame is swapped for one worth seeing, and an animated
+      // slide is put into its after-the-last-click look, whoever converts it
+      if (/\.(pptx|pptm|ppsx)$/i.test(name)) {
+        try {
+          const fixed = await fixDeckBytes(await window.board.readFile(filePath), { finalLook: app.settings.slidesFinalLook !== false });
+          if (fixed.bytes) how.bytes = fixed.bytes;
+        } catch (e) { console.warn('[import] slide media left as it was:', e?.message || e); }
+      }
+    }
+    const res = await window.board.importToPdf(filePath, how);
     if (!res.ok) { progress.close(); app.toast(res.error || t('Import failed')); return null; }
+    if (res.officeNote) {
+      app.toast(res.officeNote === 'absent'
+        ? t('Microsoft Office is not on this computer, so the usual converter was used')
+        : t('Microsoft Office could not convert this file, so the usual converter was used'));
+    }
 
-    progress.update(0.2, res.engine === 'libreoffice' ? t('Converted with LibreOffice — reading pages…') : t('Reading pages…'));
+    progress.update(0.2, res.engine === 'msoffice' ? t('Converted with Microsoft Office — reading pages…')
+      : res.engine === 'libreoffice' ? t('Converted with LibreOffice — reading pages…') : t('Reading pages…'));
     doc = await openPdf(res.data);
     const total = doc.numPages;
     if (!total) { progress.close(); app.toast(t('No pages found in that document')); return null; }

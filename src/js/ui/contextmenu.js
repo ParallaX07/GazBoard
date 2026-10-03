@@ -4,6 +4,10 @@ import { h, openPopover, closePopover } from './popover.js';
 import { icon } from './icons.js';
 import { t } from '../i18n.js';
 import { PEN_COLORS, NOTE_COLORS, TEXT_COLORS, SHAPE_STROKES, SHAPE_FILLS } from './palettes.js';
+import { inkPaint } from '../core/render.js';
+
+// kinds whose default ink the board draws light on a dark theme (notes and tables keep their own dark ink)
+const FOLLOWS_BOARD = new Set(['stroke', 'shape', 'text', 'math']);
 
 function item(label, iconName, onClick, opts = {}) {
   const b = h('button', { class: 'menu-item' + (opts.danger ? ' danger' : '') },
@@ -158,7 +162,10 @@ export function updateSelectionBar(app) {
     const swatch = h('button', { class: 'colour-btn', title: t('Colour') });
     const dot = h('span', {});
     const currentColor = type === 'shape' ? sel[0].stroke : sel[0].color;
-    dot.style.cssText = `width:17px;height:17px;border-radius:50%;background:${currentColor || '#201f1e'};box-shadow:inset 0 0 0 1px rgba(0,0,0,.2)`;
+    // the dot shows the colour as it is drawn: default ink is light on a dark board, so the dot is too
+    const shownColor = FOLLOWS_BOARD.has(type) ? inkPaint(currentColor) : (currentColor || '#201f1e');
+    dot.style.cssText = `width:17px;height:17px;border-radius:50%;background:${shownColor};box-shadow:inset 0 0 0 1px rgba(128,128,128,.45)`;
+    dot.dataset.colour = shownColor;
     swatch.appendChild(dot);
     swatch.addEventListener('click', () => openColorPopover(app, swatch, type, sel));
     bar.appendChild(swatch);
@@ -241,7 +248,13 @@ function openColorPopover(app, anchor, type, sel) {
   const grid = h('div', { class: 'swatches' });
   for (const c of colors) {
     const b = h('button', { class: 'sw', title: c });
-    b.style.background = c;
+    // same as the toolbar's own picker: the default ink is shown as it draws, ringed to say it follows the board
+    const shown = FOLLOWS_BOARD.has(type) ? inkPaint(c) : c;
+    b.style.background = shown;
+    if (shown !== c) {
+      b.classList.add('sw-adaptive');
+      b.title = t('{c} — follows the board: light on dark, black on white and in exports', { c });
+    }
     b.addEventListener('click', () => {
       const key = type === 'shape' ? 'stroke' : 'color';
       /*

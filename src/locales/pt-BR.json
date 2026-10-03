@@ -989,5 +989,13 @@
  "Enter to finish · Shift+Enter for a new line · Esc to cancel": "Enter para concluir · Shift+Enter para nova linha · Esc para cancelar",
  "Tip: in any text, $x^2$ puts maths in a sentence.": "Dica: em qualquer texto, $x^2$ coloca uma fórmula na frase.",
  "My boards as a full page": "Meus quadros em página inteira",
- "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "Ligado (padrão): pastas ao lado, pastas coloridas e uma imagem de cada quadro. Desligado: uma lista simples no painel lateral."
+ "On (default): folders down the side, coloured folder tiles and a picture of every board. Off: a simple list in the side panel.": "Ligado (padrão): pastas ao lado, pastas coloridas e uma imagem de cada quadro. Desligado: uma lista simples no painel lateral.",
+ "Video": "Vídeo",
+ "Microsoft Office is not on this computer, so the usual converter was used": "O Microsoft Office não está neste computador, então o conversor de sempre foi usado",
+ "Microsoft Office could not convert this file, so the usual converter was used": "O Microsoft Office não conseguiu converter este arquivo, então o conversor de sempre foi usado",
+ "Converted with Microsoft Office — reading pages…": "Convertido com o Microsoft Office — lendo as páginas…",
+ "Import with Microsoft Office (beta)": "Importar com o Microsoft Office (beta)",
+ "Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.": "Arquivos do Word, Excel e PowerPoint são abertos no seu próprio Microsoft Office, sem aparecer, e salvos como páginas PDF — uma cópia exata, do jeito que o Microsoft Whiteboard mostra. Mais lento: o Office leva alguns segundos para abrir. Planilhas largas são ajustadas a uma página de largura. Se o Office não estiver instalado, o conversor de sempre é usado.",
+ "Animated slides come in after the last click": "Slides animados chegam como ficam depois do último clique",
+ "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "Ligado (padrão): cada slide chega do jeito que fica depois de todos os cliques — o que some com esmaecimento desaparece, o que se move fica onde para, o que cresce fica no tamanho total. Desligado: o slide como está antes do primeiro clique, com tudo ao mesmo tempo."
 }

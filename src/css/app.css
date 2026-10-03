@@ -1251,12 +1251,15 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 #classTimer.ct-paused .ct-digits { opacity: .55; }
 /* The corner to size it by: three short diagonal lines, the usual sign. */
 #classTimer .ct-resize {
-  position: absolute; right: 2px; bottom: 2px; width: 16px; height: 16px; cursor: nwse-resize;
+  /* about 22 screen pixels whatever the clock's size, so the corner is easy to catch */
+  position: absolute; right: 0; bottom: 0; width: calc(22px / var(--ct-s, 1)); height: calc(22px / var(--ct-s, 1));
+  cursor: nwse-resize; touch-action: none;
   background: linear-gradient(135deg, transparent 45%, var(--text-2) 45%, var(--text-2) 52%, transparent 52%,
     transparent 64%, var(--text-2) 64%, var(--text-2) 71%, transparent 71%, transparent 83%, var(--text-2) 83%, var(--text-2) 90%, transparent 90%);
   opacity: .5; border-radius: 0 0 12px 0;
 }
-#classTimer .ct-resize:hover { opacity: 1; }
+#classTimer .ct-resize:hover, #classTimer.ct-sizing .ct-resize { opacity: 1; }
+#classTimer.ct-sizing, #classTimer.ct-sizing * { cursor: nwse-resize; }
 /* The last thirty seconds, and time's up: red, so the back row sees it
    coming. At zero it also pulses for a few seconds - noticed, not an alarm. */
 #classTimer.ct-low .ct-digits, #classTimer.ct-low .ct-now-digits { color: #d13438; }
