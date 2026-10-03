@@ -1696,7 +1696,7 @@ class App {
       }
       case 'edit.selectAll': this.setSelection(s.doc.order.filter((id) => !s.get(id)?.locked && !ghost(s.get(id)))); this.setTool('select'); break;
       case 'edit.copy': this.copy(); break;
-      case 'edit.cut': this.copy(); if (sf.selection.size) { s.remove([...sf.selection]); sf.selection.clear(); } break;
+      case 'edit.cut': this.copy(); if (sf.selection.size) { s.remove(withAttached(s, [...sf.selection])); sf.selection.clear(); } break;
       // Every way of asking to paste goes through the one rule. The Edit menu
       // used to call paste() straight, which knows only about board objects -
       // so Ctrl+V could hand back objects while something newer sat on the
@@ -1892,8 +1892,38 @@ class App {
    * meant. Changed means something else was copied afterwards and that is what
    * paste is for. Last copy wins, without either side destroying the other's.
    */
+  /**
+   * The selection plus the ink written on it.
+   *
+   * Ink drawn on a locked page or picture belongs to it: it moves when the
+   * page moves. Copying, cutting or duplicating the page has to take that ink
+   * along too, or the copy arrives bare and a cut leaves the writing floating
+   * where the page used to be. Kept in board order, so the ink stays on top.
+   */
+  withRiders(objs) {
+    const ids = new Set(withAttached(this.store, objs.map((o) => o.id)));
+    return this.store.doc.order.filter((id) => ids.has(id)).map((id) => this.store.get(id)).filter(Boolean);
+  }
+
+  /**
+   * Copies of a batch of objects, moved by (dx, dy): groups become new groups
+   * of their own (see regroup), and ink that was on a copied page is on the
+   * copy of that page - not on the original. Ink copied without its page is
+   * simply loose ink.
+   */
+  cloneBatch(objs, dx, dy) {
+    const ids = new Map();
+    const copies = objs.map((o) => { const c = this.cloneWithOffset(o, dx, dy); ids.set(o.id, c.id); return c; });
+    for (const c of copies) {
+      if (!c.attachedTo) continue;
+      if (ids.has(c.attachedTo)) c.attachedTo = ids.get(c.attachedTo);
+      else delete c.attachedTo;
+    }
+    return this.regroup(copies);
+  }
+
   copy() {
-    const objs = this.selected;
+    const objs = this.withRiders(this.selected);
     if (!objs.length) return;
     this.clipboard = objs.map((o) => structuredClone(o));
     this.clipStamp = this.clipboardStamp();
@@ -1983,9 +2013,9 @@ class App {
   }
 
   duplicate() {
-    const objs = this.selected;
+    const objs = this.withRiders(this.selected);
     if (!objs.length) return;
-    const copies = this.regroup(objs.map((o) => this.cloneWithOffset(o, 28, 28)));
+    const copies = this.cloneBatch(objs, 28, 28);
     this.store.addMany(copies, 'duplicate');
     this.setSelection(copies.map((o) => o.id));
   }
@@ -2083,8 +2113,7 @@ class App {
     if (!held) { this.toast(t('Nothing copied yet'), 'help'); return; }
     const box = this.clipboard.reduce((b, o) => unionBox(b, boundsOf(o)), null);
     if (!box) { this.paste(); return; }
-    const copies = this.regroup(this.clipboard.map(
-      (o) => this.cloneWithOffset(o, wp.x - (box.x + box.w / 2), wp.y - (box.y + box.h / 2))));
+    const copies = this.cloneBatch(this.clipboard, wp.x - (box.x + box.w / 2), wp.y - (box.y + box.h / 2));
     this.store.addMany(copies, 'paste');
     this.setSelection(copies.map((o) => o.id));
     this.clipboard = copies.map((o) => structuredClone(o));
@@ -2092,7 +2121,7 @@ class App {
 
   paste() {
     if (!this.clipboard.length) return;
-    const copies = this.regroup(this.clipboard.map((o) => this.cloneWithOffset(o, 32, 32)));
+    const copies = this.cloneBatch(this.clipboard, 32, 32);
     this.store.addMany(copies, 'paste');
     this.setSelection(copies.map((o) => o.id));
     this.clipboard = copies.map((o) => structuredClone(o));

@@ -915,6 +915,58 @@ async function run(win, app) {
     adopt.moved.slide === 100 && adopt.moved.ink === 100,
     `slide ${adopt.moved.slide}, ink ${adopt.moved.ink}`);
 
+  /* ---- ink on a page goes with the page when it is copied, cut, pasted or duplicated ---- */
+  const riders = await js(`
+    const a = window.app;
+    a.newBoard(true);
+    const px = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    a.store.add({ id: 'pg', type: 'image', kind: 'page', x: 100, y: 100, w: 400, h: 300, rotation: 0, src: px, name: 'deck.pptx' }, 'a');
+    a.store.add({ id: 'ink1', type: 'stroke', color: '#e81123', size: 4, attachedTo: 'pg',
+      points: [{ x: 200, y: 200 }, { x: 300, y: 240 }], bbox: { x: 200, y: 200, w: 100, h: 40 } }, 'a');
+    a.store.add({ id: 'loose', type: 'stroke', color: '#0078d4', size: 4,
+      points: [{ x: 900, y: 200 }, { x: 950, y: 240 }], bbox: { x: 900, y: 200, w: 50, h: 40 } }, 'a');
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke');
+    const pages = () => a.store.objects.filter((o) => o.type === 'image');
+    const pairOk = () => {
+      // every page copy has exactly one red stroke on it, attached to that copy and moved with it
+      return pages().every((p) => {
+        const mine = strokes().filter((s) => s.attachedTo === p.id);
+        return mine.length === 1 && Math.round(mine[0].bbox.x - p.x) === 100;
+      });
+    };
+    const r = {};
+    // locked, selected alone, duplicated
+    a.store.update('pg', { locked: true }, 'lock');
+    a.setSelection(['pg']); a.command('edit.duplicate');
+    r.dup = { pages: pages().length, red: strokes().filter((s) => s.color === '#e81123').length, paired: pairOk(), loose: strokes().filter((s) => s.color === '#0078d4').length };
+    // copy + paste the original
+    a.setSelection(['pg']); a.command('edit.copy'); a.paste();
+    r.paste = { pages: pages().length, red: strokes().filter((s) => s.color === '#e81123').length, paired: pairOk() };
+    // cut an unlocked page in a group: its ink leaves with it, and pasting brings both back
+    a.store.update('pg', { locked: false, groupId: 'gx' }, 'g');
+    a.store.add({ id: 'mate', type: 'text', x: 100, y: 450, w: 200, h: 40, rotation: 0, fontSize: 20, color: '#201f1e', text: 'caption', groupId: 'gx' }, 'a');
+    a.setSelection(['pg', 'mate']); a.command('edit.cut');
+    r.cut = { pgGone: !a.store.get('pg'), inkGone: !a.store.get('ink1'), looseKept: !!a.store.get('loose') };
+    a.paste();
+    const back = pages().find((p) => p.groupId && a.store.objects.some((o) => o.type === 'text' && o.groupId === p.groupId));
+    r.cutPaste = { page: !!back, ink: !!back && strokes().some((s) => s.attachedTo === back.id), paired: pairOk() };
+    // ink copied on its own is plain loose ink, not tied to the original page
+    a.setSelection(strokes().filter((s) => s.attachedTo).slice(0, 1).map((s) => s.id)); a.command('edit.duplicate');
+    const lone = a.store.get([...a.surface.selection][0]);
+    r.inkAlone = lone ? (lone.attachedTo === undefined ? 'loose' : 'tied to ' + lone.attachedTo) : 'none';
+    a.setSelection([]); a.newBoard(true);
+    a.clipboard = []; a.clipStamp = null;      // later checks paste from the machine's clipboard
+    return r;
+  `);
+  check('duplicating or copying a page brings the ink written on it, on the copy',
+    riders.dup.pages === 2 && riders.dup.red === 2 && riders.dup.paired && riders.dup.loose === 1 &&
+    riders.paste.pages === 3 && riders.paste.red === 3 && riders.paste.paired,
+    JSON.stringify({ duplicate: riders.dup, paste: riders.paste }));
+  check('cutting a grouped page takes its ink too, and pasting brings both back together',
+    riders.cut.pgGone && riders.cut.inkGone && riders.cut.looseKept && riders.cutPaste.page && riders.cutPaste.ink && riders.cutPaste.paired &&
+    riders.inkAlone === 'loose',
+    JSON.stringify({ cut: riders.cut, pasteBack: riders.cutPaste, inkCopiedAlone: riders.inkAlone }));
+
   /* ---- ink drawn on a locked object belongs to it ---- */
   const attach = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
