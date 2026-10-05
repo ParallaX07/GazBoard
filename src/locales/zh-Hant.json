@@ -997,5 +997,7 @@
  "Import with Microsoft Office (beta)": "用 Microsoft Office 匯入（測試版）",
  "Word, Excel and PowerPoint files are opened in your own Microsoft Office, out of sight, and saved as PDF pages — an exact copy, the way Microsoft Whiteboard shows them. Slower: Office takes a few seconds to start. Wide spreadsheets are fitted to one page across. If Office is not installed, the usual converter is used.": "Word、Excel 和 PowerPoint 檔案會在你自己的 Microsoft Office 中於背景開啟，並儲存為 PDF 頁面 —— 與 Microsoft Whiteboard 顯示的一模一樣。速度較慢：Office 需要幾秒鐘啟動。較寬的試算表會縮放為一頁寬。如果沒有安裝 Office，則使用一般轉換器。",
  "Animated slides come in after the last click": "動畫投影片按最後一次點擊後的樣子匯入",
- "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "開啟（預設）：每張投影片按所有點擊完成後的樣子匯入 —— 淡出的內容消失，移動的內容停在終點，放大的內容為完整大小。關閉：第一次點擊之前的投影片，所有內容同時出現。"
+ "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "開啟（預設）：每張投影片按所有點擊完成後的樣子匯入 —— 淡出的內容消失，移動的內容停在終點，放大的內容為完整大小。關閉：第一次點擊之前的投影片，所有內容同時出現。",
+ "Spacing": "間距",
+ "About {mm} mm apart when printed. New boards use this spacing too.": "列印時間距約 {mm} 毫米。新增白板也會使用此間距。"
 }

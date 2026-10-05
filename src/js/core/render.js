@@ -64,14 +64,32 @@ export function pageRect(pages, cam) {
 /** First grid line at or after `from`, on the lattice `origin + k*step`. */
 const lineFrom = (origin, step, from) => origin + Math.ceil((from - origin) / step) * step;
 
+/**
+ * How far apart the lines, squares and dots of a pattern are, in world units
+ * (96 to the inch): about 5, 7.5, 10.5 and 15 mm on a printed sheet. 40 is
+ * what every board had before there was a choice, and what a board with no
+ * setting still gets.
+ */
+export const PATTERN_SPACINGS = [19, 28, 40, 56];   // ~5, 7.5, 10.5 and 15 mm on paper; 19 matches Xournal++'s 5 mm graph paper
+
 function drawPattern(ctx, bg, cam, w, h, anchor, bounds) {
   const pattern = bg.pattern || 'none';
   if (pattern === 'none') return;
 
-  const base = 40;                        // world spacing
+  const base = PATTERN_SPACINGS.includes(bg.spacing) ? bg.spacing : 40;   // world spacing
   let step = base * cam.z;
-  while (step < 14) step *= 2;            // keep it readable when zoomed out
-  while (step > 120) step /= 2;
+  if (anchor) {
+    /*
+     * A sheet of paper has its ruling printed on it: true to size at every
+     * zoom, so the lines sit the same distance apart on screen, in a PDF and
+     * on the printout, and handwriting keeps its proportion to them. They are
+     * only thinned out once they would run together.
+     */
+    while (step < 6) step *= 2;
+  } else {
+    while (step < 14) step *= 2;          // keep it readable when zoomed out
+    while (step > 120) step /= 2;
+  }
   const ax = anchor ? anchor.x : cam.x;
   const ay = anchor ? anchor.y : cam.y;
   const ox = ((ax % step) + step) % step;

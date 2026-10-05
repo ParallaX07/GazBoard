@@ -9,6 +9,7 @@ import { PAPER, paperForPage } from './pdfdialog.js';
 import { exportBoards } from '../board-export.js';
 import { BOARD_COLORS, PATTERNS } from './palettes.js';
 import { inkTrailSupported } from '../core/inktrail.js';
+import { PATTERN_SPACINGS } from '../core/render.js';
 import * as F from '../core/folders.js';
 
 /**
@@ -133,6 +134,26 @@ export function createPanels(app) {
         pats.appendChild(b);
       }
 
+      // how far apart the pattern's lines are - the choice also becomes the spacing of every new board
+      const spacingRow = h('div', { class: 'bg-sizes' });
+      const spacingNow = PATTERN_SPACINGS.includes(bg.spacing) ? bg.spacing : 40;
+      const SPACING_LABEL = { 19: t('Narrow'), 28: t('Small'), 40: t('Normal'), 56: t('Wide') };
+      for (const v of PATTERN_SPACINGS) {
+        const b = h('button', { class: 'btn' + (spacingNow === v ? ' primary' : ''), 'data-spacing': String(v) }, SPACING_LABEL[v]);
+        b.addEventListener('click', () => {
+          app.store.setBackground({ spacing: v });
+          app.settings.patternSpacing = v;
+          app.saveSettings();
+          rerender(); refresh();
+        });
+        spacingRow.appendChild(b);
+      }
+      const mm = (v) => (Math.round(v / (96 / 25.4) * 2) / 2).toLocaleString();
+      const spacingNote = h('p', { style: 'margin:6px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
+        t('About {mm} mm apart when printed. New boards use this spacing too.', { mm: mm(spacingNow) }));
+      const spacingSection = (bg.pattern && bg.pattern !== 'none')
+        ? h('div', { class: 'section' }, h('h5', {}, t('Spacing')), spacingRow, spacingNote) : null;
+
       const custom = h('input', { type: 'color', value: bg.color });
       custom.addEventListener('input', () => app.store.setBackground({ color: custom.value }));
       // one write when the picker is let go, not one per drag of the slider
@@ -252,6 +273,7 @@ export function createPanels(app) {
         h('div', { class: 'section' }, h('h5', {}, t('Colour')), colors),
         h('div', { class: 'section' }, h('h5', {}, t('Custom colour')), custom),
         h('div', { class: 'section' }, h('h5', {}, t('Pattern')), pats),
+        spacingSection,
         h('div', { class: 'section' }, h('h5', {}, t('New boards')), rememberRow)
       );
     });

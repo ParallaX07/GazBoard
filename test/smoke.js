@@ -6177,6 +6177,116 @@ async function run(win, app) {
   check('and turning it off gives plain new boards back',
     canvasMemory.plainAgain === true, `next board was plain again: ${canvasMemory.plainAgain}`);
 
+  /* ---- how far apart the ruling sits, true to size on paper, and kept for new boards ---- */
+  /*
+   * A teacher printing A4 found the lines too far apart for neat handwriting:
+   * 40 units is 10.6 mm on paper, where Xournal++ rules its graph paper 5 mm
+   * apart. The spacing is now a choice, the last choice is what every new
+   * board gets, and on a sheet the ruling is drawn at its real size at every
+   * zoom - halving it on screen when it looked "too big" is what used to make
+   * the screen and the printout disagree.
+   */
+  const spacing = await js(`
+    const a = window.app;
+    const R = await import('app://board/js/core/render.js');
+    const r = {};
+    // lines measured off a real drawing: the gaps between dark rows down one column
+    const gaps = (bg, z, pages) => {
+      const c = document.createElement('canvas'); c.width = 900; c.height = 1300;
+      const ctx = c.getContext('2d');
+      const cam = pages ? { x: 10 + 397 * z, y: 10 + 561.5 * z, z } : { x: 0, y: 0, z };
+      R.drawBackground(ctx, { color: '#ffffff', patternColor: '#000000', ...bg }, cam, 900, 1300, pages);
+      const col = ctx.getImageData(300, 0, 1, 1300).data;
+      const rows = [];
+      const top = pages ? 12 : 0, bottom = pages ? Math.min(1300, 10 + 1123 * z - 2) : 1300;
+      for (let y = top; y < bottom; y++) if (col[y * 4] < 200 && !(rows.length && y - rows[rows.length - 1] < 2)) rows.push(y);
+      const g = rows.slice(1).map((y, i) => y - rows[i]);
+      return g.length ? +(g.reduce((s, v) => s + v, 0) / g.length).toFixed(2) : 0;
+    };
+    const a4 = [{ w: 794, h: 1123 }];
+    r.choices = R.PATTERN_SPACINGS.join(',');
+    r.a4Narrow = gaps({ pattern: 'lines', spacing: 19 }, 1, a4);
+    r.a4NarrowHalfZoom = gaps({ pattern: 'lines', spacing: 19 }, 0.5, a4);
+    r.a4Normal = gaps({ pattern: 'grid', spacing: 40 }, 1, a4);
+    r.a4OldBoard = gaps({ pattern: 'lines' }, 1, a4);
+    r.a4OddValue = gaps({ pattern: 'lines', spacing: 3 }, 1, a4);
+    r.infiniteQuarterZoom = gaps({ pattern: 'lines' }, 0.25, null);   // 10 px would crowd: doubled to 20, as always
+    r.infiniteNormal = gaps({ pattern: 'lines' }, 1, null);
+
+    // the Canvas panel: pick Narrow, and it sticks for the next board
+    const s = a.settings;
+    s.patternSpacing = 40; delete s.canvasDefaults; s.rememberCanvas = false; a.saveSettings();
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 150));
+    await a.setPageSize('a4', 'portrait');
+    a.store.setBackground({ pattern: 'lines' });
+    a.panels.background();
+    await new Promise((res) => setTimeout(res, 140));
+    const btn = document.querySelector('#panelBody [data-spacing="19"]');
+    r.foundButton = !!btn;
+    r.buttons = [...document.querySelectorAll('#panelBody [data-spacing]')].map((b) => b.dataset.spacing + ':' + b.textContent).join(', ');
+    if (btn) btn.click();
+    await new Promise((res) => setTimeout(res, 140));
+    r.boardSpacing = a.store.doc.background.spacing;
+    r.settingSpacing = s.patternSpacing;
+    r.note = [...document.querySelectorAll('#panelBody p')].map((p) => p.textContent).find((x) => /mm apart/.test(x)) || '';
+    r.undoable = a.store.undoStack.length > 0;
+    a.panels.close?.();
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 250));
+    r.newBoardSpacing = a.store.doc.background.spacing;
+    r.newBoardUndo = a.store.undoStack.length;
+    a.store.load({ id: 'old-ruled', name: 'Ruled last month', schema: 2,
+      background: { color: '#ffffff', pattern: 'lines' }, pages: [], objects: [], order: [] });
+    await new Promise((res) => setTimeout(res, 150));
+    r.oldBoardSpacing = a.store.doc.background.spacing === undefined ? 'none (draws at 40)' : a.store.doc.background.spacing;
+    // a board shared with someone else keeps its own spacing both ways: theirs opens as they ruled it
+    // (our Narrow habit does not touch it), and ours travels with the file and comes back intact
+    s.patternSpacing = 19;
+    a.store.load({ id: 'shared-wide', name: 'From a colleague', schema: 2,
+      background: { color: '#ffffff', pattern: 'grid', spacing: 56 }, pages: [], objects: [], order: [] });
+    await new Promise((res) => setTimeout(res, 120));
+    r.sharedOpened = a.store.doc.background.spacing;
+    const saved = JSON.parse(JSON.stringify(a.store.toJSON()));
+    a.store.load(saved);
+    r.sharedRoundTrip = a.store.doc.background.spacing;
+    r.sharedUndo = a.store.undoStack.length;
+    s.patternSpacing = 40; a.saveSettings();
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 200));
+    r.backToNormal = a.store.doc.background.spacing === undefined || a.store.doc.background.spacing === 40;
+    a.store.clear();
+    return r;
+  `);
+  check('the spacing choices are about 5, 7.5, 10.5 and 15 mm on paper',
+    spacing.choices === '19,28,40,56', `choices in world units: ${spacing.choices} (wanted 19,28,40,56)`);
+  check('on an A4 sheet the ruling is drawn at its true spacing',
+    Math.abs(spacing.a4Narrow - 19) < 0.6 && Math.abs(spacing.a4Normal - 40) < 0.6,
+    `Narrow lines ${spacing.a4Narrow} px apart at 100% (wanted 19), Normal grid ${spacing.a4Normal} (wanted 40)`);
+  check('and stays true to size when zoomed out, so screen and printout agree',
+    Math.abs(spacing.a4NarrowHalfZoom - 9.5) < 0.6,
+    `Narrow lines ${spacing.a4NarrowHalfZoom} px apart at 50% (wanted 9.5; 19 means it was doubled like the infinite canvas)`);
+  check('boards made before keep their old 40, and odd values fall back to it',
+    Math.abs(spacing.a4OldBoard - 40) < 0.6 && Math.abs(spacing.a4OddValue - 40) < 0.6,
+    `no spacing saved: ${spacing.a4OldBoard} px; spacing 3: ${spacing.a4OddValue} px (both wanted 40)`);
+  check('the infinite canvas behaves exactly as before',
+    Math.abs(spacing.infiniteNormal - 40) < 0.6 && Math.abs(spacing.infiniteQuarterZoom - 20) < 0.6,
+    `infinite canvas lines ${spacing.infiniteNormal} px apart at 100% (wanted 40) and ${spacing.infiniteQuarterZoom} at 25% (wanted 20, thinned out as before)`);
+  check('the Canvas panel offers the spacing and picking Narrow sets it',
+    spacing.foundButton && spacing.boardSpacing === 19 && spacing.settingSpacing === 19 && /\b5\b/.test(spacing.note) && spacing.undoable,
+    `buttons: ${spacing.buttons}; board spacing ${spacing.boardSpacing}, remembered ${spacing.settingSpacing} (both wanted 19); ` +
+    `note "${spacing.note}" (wanted about 5 mm); undoable: ${spacing.undoable}`);
+  check('every new board keeps that spacing, without it being an undo step',
+    spacing.newBoardSpacing === 19 && spacing.newBoardUndo === 0,
+    `new board spacing ${spacing.newBoardSpacing} (wanted 19), ${spacing.newBoardUndo} thing(s) to undo (wanted 0)`);
+  check('a shared board opens with the spacing it was made with, and keeps it when saved',
+    spacing.sharedOpened === 56 && spacing.sharedRoundTrip === 56 && spacing.sharedUndo === 0,
+    `opened with ${spacing.sharedOpened}, after saving and reopening ${spacing.sharedRoundTrip} (both wanted 56, ` +
+    `even with Narrow chosen here); ${spacing.sharedUndo} thing(s) to undo (wanted 0 - opening must not edit it)`);
+  check('while an older board opens with its own spacing',
+    spacing.oldBoardSpacing === 'none (draws at 40)' && spacing.backToNormal,
+    `older board spacing: ${spacing.oldBoardSpacing}; Normal again for new boards afterwards: ${spacing.backToNormal}`);
+
   check('and pressing that button brings the work onto the page, losing none of it',
     sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
     sizeMenu.offerGoneWhenNothingStray === true,

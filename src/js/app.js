@@ -65,7 +65,7 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -681,6 +681,13 @@ class App {
 
   /** Put the remembered look on a board that has just been made. */
   applyCanvasDefaults() {
+    /*
+     * The pattern spacing is a habit of the hand, not a look for one board:
+     * whatever was chosen last is what every new board gets, whether or not
+     * "Use this canvas for new boards" is on. Boards made before keep theirs.
+     */
+    const spacing = this.settings.patternSpacing;
+    if (spacing && spacing !== 40) { this.store.doc.background.spacing = spacing; this.store.rev++; }
     const want = this.settings.rememberCanvas ? this.settings.canvasDefaults : null;
     if (!want) return;
     const bg = {};
