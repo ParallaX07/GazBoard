@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "已將 {n} 個物件移回紙張上",
  "One thing is off the page": "有一個物件在頁面外",
  "{n} things are off the page": "有 {n} 個物件在頁面外",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "匯出範圍是整張紙，紙張外的內容都不會包含在內。你可以先把白板內容縮小以符合頁面，或直接照目前的樣子匯出。",
- "Fit everything on": "全部縮放到頁面內",
  "Export the sheet anyway": "仍照目前樣子匯出",
  "Nothing on the board to export": "白板上沒有可以匯出的內容",
  "Cancel": "取消",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "動畫投影片按最後一次點擊後的樣子匯入",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "開啟（預設）：每張投影片按所有點擊完成後的樣子匯入 —— 淡出的內容消失，移動的內容停在終點，放大的內容為完整大小。關閉：第一次點擊之前的投影片，所有內容同時出現。",
  "Spacing": "間距",
- "About {mm} mm apart when printed. New boards use this spacing too.": "列印時間距約 {mm} 毫米。新增白板也會使用此間距。"
+ "About {mm} mm apart when printed. New boards use this spacing too.": "列印時間距約 {mm} 毫米。新增白板也會使用此間距。",
+ "Notebook": "筆記本",
+ "Show the date": "顯示日期",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "每頁顯示其建立當天的日期（取自這台電腦的日曆）。之後再開啟白板，日期也不會改變。",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "匯出只包含紙張範圍，紙張外的內容不會被匯出。你可以先把這些內容移到頁面上（頁面上已有的內容不會移動），或直接照原樣匯出。",
+ "Move them onto the page": "把它們移到頁面上"
 }

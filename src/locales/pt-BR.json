@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "{n} itens foram trazidos de volta para o papel",
  "One thing is off the page": "Um item está fora da página",
  "{n} things are off the page": "{n} itens estão fora da página",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "As exportações cobrem a folha, então o que estiver fora dela ficará de fora. Você pode reduzir o quadro para caber antes ou exportar a folha como está.",
- "Fit everything on": "Ajustar tudo",
  "Export the sheet anyway": "Exportar a folha mesmo assim",
  "Nothing on the board to export": "Não há nada no quadro para exportar",
  "Cancel": "Cancelar",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "Slides animados chegam como ficam depois do último clique",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "Ligado (padrão): cada slide chega do jeito que fica depois de todos os cliques — o que some com esmaecimento desaparece, o que se move fica onde para, o que cresce fica no tamanho total. Desligado: o slide como está antes do primeiro clique, com tudo ao mesmo tempo.",
  "Spacing": "Espaçamento",
- "About {mm} mm apart when printed. New boards use this spacing too.": "Cerca de {mm} mm de distância na impressão. Novos quadros também usam este espaçamento."
+ "About {mm} mm apart when printed. New boards use this spacing too.": "Cerca de {mm} mm de distância na impressão. Novos quadros também usam este espaçamento.",
+ "Notebook": "Caderno",
+ "Show the date": "Mostrar a data",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "Cada página mostra o dia em que foi iniciada, pelo calendário deste computador. A data não muda quando você abrir o quadro depois.",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "A exportação cobre a folha, então o que estiver fora dela fica de fora. Você pode mover esses itens para a página antes - o que já está na página não se move - ou exportar a folha como está.",
+ "Move them onto the page": "Movê-los para a página"
 }

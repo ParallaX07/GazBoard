@@ -27,7 +27,8 @@ export const PATTERNS = [
   { id: 'dots', label: t('Dots') },
   { id: 'lines', label: t('Lines') },
   { id: 'columns', label: t('Columns') },
-  { id: 'graph', label: t('Graph') }
+  { id: 'graph', label: t('Graph') },
+  { id: 'notebook', label: t('Notebook') }
 ];
 
 export const SHAPES = [

@@ -6287,6 +6287,675 @@ async function run(win, app) {
     spacing.oldBoardSpacing === 'none (draws at 40)' && spacing.backToNormal,
     `older board spacing: ${spacing.oldBoardSpacing}; Normal again for new boards afterwards: ${spacing.backToNormal}`);
 
+  /* ---- notebook paper: blue rules, a red margin, and the date each sheet was started ---- */
+  /*
+   * Every promise made about the date is checked here, one at a time, with a
+   * fake clock standing in for "last Tuesday" and "tomorrow":
+   *   1 it stays fixed once written        4 small, grey, right of the top strip - and it prints
+   *   2 new pages get their own date       5 it travels with the board
+   *   3 it follows the language            6 it can be switched off
+   * Pixel checks read real drawings: red = margin, blue = rules, grey = date.
+   */
+  await js(String.raw`
+    const R = await import('app://board/js/core/render.js');
+    const P = await import('app://board/js/core/pages.js');
+    const D = await import('app://board/js/ui/pdfdialog.js');
+    const I = await import('app://board/js/i18n.js');
+    const realNow = P.pageClock.now;
+    const day = (y, m, d) => () => new Date(y, m - 1, d, 10, 30);
+    const isRed = (r, g, b) => r > 170 && r - g > 45 && r - b > 30;
+    const isBlue = (r, g, b) => b - r > 35 && b > 150;
+    const isGrey = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) < 16 && r < 228;
+    // one sheet on its own canvas, its top-left corner at (0,0)
+    const paint = (page, bg, z = 1, withDesk = false) => {
+      const w = Math.round(page.w * z), h = Math.round(page.h * z);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      const full = { color: '#ffffff', pattern: 'notebook', spacing: 28, ...bg };
+      const cam = { x: page.w / 2 * z, y: page.h / 2 * z, z };
+      if (withDesk) R.drawBackground(ctx, full, cam, w, h, [page]);
+      else { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); R.drawRuling(ctx, full, cam, w, h, [page]); }
+      return { c, ctx, w, h, data: ctx.getImageData(0, 0, w, h).data };
+    };
+    const px = (img, x, y) => { const i = (Math.round(y) * img.w + Math.round(x)) * 4; return [img.data[i], img.data[i + 1], img.data[i + 2]]; };
+    // the grey writing inside a box: its bounding box, or null
+    const greyBox = (img, x0, y0, x1, y1) => {
+      let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1, n = 0;
+      for (let y = Math.max(0, Math.floor(y0)); y < Math.min(img.h, y1); y++) for (let x = Math.max(0, Math.floor(x0)); x < Math.min(img.w, x1); x++) {
+        const [r, g, b] = px(img, x, y);
+        if (isGrey(r, g, b)) { n++; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      }
+      return n ? { minX, minY, maxX, maxY, n } : null;
+    };
+    // a fingerprint of what is written in the top strip, to tell one date from another
+    const stripPrint = (img, top) => {
+      let hsh = 0;
+      for (let y = 0; y < top - 1; y++) for (let x = 0; x < img.w; x++) { const [r] = px(img, x, y); hsh = (hsh * 31 + (r >> 4)) | 0; }
+      return hsh;
+    };
+    const blueRows = (img, x, from = 0) => {
+      const rows = [];
+      for (let y = from; y < img.h; y++) { const [r, g, b] = px(img, x, y); if (isBlue(r, g, b) && !(rows.length && y - rows[rows.length - 1] < 2)) rows.push(y); }
+      return rows;
+    };
+    window.__nb = { R, P, D, I, realNow, day, isRed, isBlue, isGrey, paint, px, greyBox, stripPrint, blueRows };
+    return true;
+  `);
+
+  // 4. where everything sits, on every paper size and both orientations
+  const nbLayout = await js(String.raw`
+    const { R, D, paint, px, greyBox, isRed, blueRows } = window.__nb;
+    const out = [];
+    for (const paper of ['a4', 'a5', 'letter', 'legal', 'a3']) for (const orient of ['portrait', 'landscape']) {
+      const size = D.pageWorldSize(paper, orient);
+      const page = { w: size.w, h: size.h, date: '2026-09-29' };
+      const img = paint(page, {});
+      const L = R.notebookLayout({ x: 0, y: 0, w: img.w, h: img.h }, 28, 1, false);
+      let red = 0;
+      for (let y = 0; y < img.h; y += 3) { const [r, g, b] = px(img, Math.floor(L.marginX), y); if (isRed(r, g, b)) red++; }
+      const firstRule = blueRows(img, Math.round(img.w * 0.6))[0];
+      const g = greyBox(img, L.marginX + 3, 0, img.w, L.top - 1);
+      const problems = [];
+      if (red < (img.h / 3) * 0.9) problems.push('margin line patchy (' + red + ' red samples)');
+      if (Math.abs(L.marginX - 25 * 96 / 25.4) > 0.5) problems.push('margin at ' + L.marginX.toFixed(1));
+      if (firstRule == null || Math.abs(firstRule - L.top) > 1.5) problems.push('first rule at ' + firstRule + ', wanted ' + L.top.toFixed(1));
+      if (!g) problems.push('no date drawn');
+      else {
+        if (g.maxX > L.dateX + 1 || g.maxX < L.dateX - 5) problems.push('date ends at x=' + g.maxX + ', wanted right-aligned at ' + L.dateX.toFixed(1));
+        if (g.minX <= L.marginX + 4) problems.push('date runs into the margin (x=' + g.minX + ')');
+        if (g.maxY >= L.top - 1) problems.push('date reaches the first rule (y=' + g.maxY + ' vs ' + L.top.toFixed(1) + ')');
+        if (g.minY < 3) problems.push('date touches the top edge');
+        if (g.maxY - g.minY > L.fontPx * 1.4) problems.push('date is ' + (g.maxY - g.minY) + 'px tall for a ' + L.fontPx.toFixed(1) + 'px font');
+      }
+      out.push({ paper: paper + ' ' + orient, w: img.w, h: img.h, problems, date: g });
+    }
+    return out;
+  `);
+  const nbBad = nbLayout.filter((x) => x.problems.length);
+  check('notebook paper: margin, first rule and date sit right on A4, A5, Letter, Legal and A3, portrait and landscape',
+    nbLayout.length === 10 && !nbBad.length,
+    nbBad.length ? nbBad.map((x) => `${x.paper} (${x.w}x${x.h}): ${x.problems.join('; ')}`).join(' | ')
+      : `${nbLayout.length} sheets checked: ` + nbLayout.map((x) => `${x.paper} date x ${x.date.minX}-${x.date.maxX}, y ${x.date.minY}-${x.date.maxY}`).join(', '));
+
+  // spacing true to size, zoomed far out, other patterns and the infinite canvas
+  const nbRules = await js(String.raw`
+    const { R, P, paint, px, greyBox, isRed, isGrey, blueRows } = window.__nb;
+    const r = {};
+    const page = { w: 794, h: 1123, date: '2026-09-29' };
+    r.gaps = {};
+    for (const s of [19, 28, 40, 56]) {
+      const img = paint(page, { spacing: s });
+      const L = R.notebookLayout({ x: 0, y: 0, w: img.w, h: img.h }, s, 1);
+      const rows = blueRows(img, 400, Math.floor(L.top) - 1);
+      const g = rows.slice(1).map((y, i) => y - rows[i]);
+      r.gaps[s] = g.length ? +(g.reduce((a, b) => a + b, 0) / g.length).toFixed(2) : 0;
+    }
+    // far out: no crash, rules thinned out instead of running together, date left out rather than a smudge
+    try {
+      const c = document.createElement('canvas'); c.width = 300; c.height = 300;
+      const z = 0.04;
+      R.drawBackground(c.getContext('2d'), { color: '#ffffff', pattern: 'notebook', spacing: 19 }, { x: 150, y: 150, z }, 300, 300, [page]);
+      const L = R.notebookLayout({ x: 0, y: 0, w: 794 * z, h: 1123 * z }, 19, z);
+      r.farOut = { ok: true, fontPx: +L.fontPx.toFixed(2) };
+    } catch (e) { r.farOut = { ok: false, error: e.message }; }
+    // the infinite canvas: just blue rules, no margin, no date
+    const c2 = document.createElement('canvas'); c2.width = 600; c2.height = 600;
+    const ctx2 = c2.getContext('2d');
+    R.drawBackground(ctx2, { color: '#ffffff', pattern: 'notebook', spacing: 28 }, { x: 0, y: 0, z: 1 }, 600, 600, null);
+    const img2 = { w: 600, h: 600, data: ctx2.getImageData(0, 0, 600, 600).data };
+    let red = 0, grey = 0;
+    for (let y = 0; y < 600; y += 2) for (let x = 0; x < 600; x += 2) { const [a, b, c] = px(img2, x, y); if (isRed(a, b, c)) red++; if (isGrey(a, b, c)) grey++; }
+    const rows2 = blueRows(img2, 300);
+    r.infinite = { red, grey, rules: rows2.length, gap: rows2.length > 1 ? rows2[1] - rows2[0] : 0 };
+    // the other patterns are left exactly as they were: no margin, no date
+    r.others = {};
+    for (const pat of ['lines', 'grid', 'dots', 'columns', 'graph']) {
+      const img = paint(page, { pattern: pat, patternColor: '#66cc66' });   // green, so a grid line can never pass for the grey date
+      let rr = 0;
+      for (let y = 0; y < img.h; y += 4) { const [a, b, c] = px(img, 94, y); if (isRed(a, b, c)) rr++; }
+      const g = greyBox(img, 110, 0, img.w, 80);
+      r.others[pat] = { red: rr, dateLike: g ? g.n : 0 };
+    }
+    return r;
+  `);
+  check('notebook rules are true to size for every spacing',
+    [19, 28, 40, 56].every((s) => Math.abs(nbRules.gaps[s] - s) < 0.6),
+    `gaps between rules at 100%: ${JSON.stringify(nbRules.gaps)} (wanted 19, 28, 40, 56)`);
+  check('zoomed far out the notebook still draws, and leaves the date out rather than a smudge',
+    nbRules.farOut.ok && nbRules.farOut.fontPx < 6,
+    `drew without error: ${nbRules.farOut.ok}${nbRules.farOut.error ? ' (' + nbRules.farOut.error + ')' : ''}; date size there ${nbRules.farOut.fontPx}px (under 6 means it is skipped)`);
+  check('on the infinite canvas notebook paper is plain blue rules - no margin, no date',
+    nbRules.infinite.red === 0 && nbRules.infinite.grey === 0 && nbRules.infinite.rules > 10 && Math.abs(nbRules.infinite.gap - 28) <= 1,
+    `red samples ${nbRules.infinite.red}, grey samples ${nbRules.infinite.grey} (both wanted 0); ${nbRules.infinite.rules} rules ${nbRules.infinite.gap}px apart (wanted 28)`);
+  check('the other patterns get no margin and no date',
+    Object.values(nbRules.others).every((o) => o.red === 0 && o.dateLike === 0),
+    JSON.stringify(nbRules.others));
+
+  // 1 and 5: made last Tuesday, still last Tuesday - through edits, and opened on another machine today
+  const nbFixed = await js(String.raw`
+    const { R, P, I, day, paint, stripPrint, realNow } = window.__nb;
+    const a = window.app, s = a.settings;
+    const r = {};
+    const savedPageDate = s.pageDate;
+    try {
+      s.patternSpacing = 40; s.pageDate = true; delete s.canvasDefaults; s.rememberCanvas = false; a.saveSettings();
+      P.pageClock.now = day(2026, 9, 29);                          // last Tuesday
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      a.panels.background();
+      await new Promise((res) => setTimeout(res, 140));
+      const tile = document.querySelector('#panelBody [data-pattern="notebook"]');
+      r.foundTile = !!tile;
+      r.tileLabel = tile ? tile.textContent : '';
+      if (tile) tile.click();
+      await new Promise((res) => setTimeout(res, 140));
+      r.pattern = a.store.doc.background.pattern;
+      r.made = a.store.pages[0].date;
+      r.dateSwitch = !!document.querySelector('#panelBody [data-page-date]');
+      a.panels.close?.();
+
+      // a week of ordinary use on later days
+      const seen = [];
+      const note = (what) => seen.push(what + ':' + a.store.pages[0].date);
+      P.pageClock.now = day(2026, 10, 1);
+      a.store.add({ id: 'nbs1', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none',
+        points: [{ x: 0, y: 0, p: .5 }, { x: 50, y: 20, p: .5 }], bbox: { x: 0, y: 0, w: 50, h: 20 }, rotation: 0 });
+      note('ink'); a.store.undo(); note('undo'); a.store.redo(); note('redo');
+      a.surface.cam.z = 3; a.surface.invalidate(); note('zoom in');
+      a.surface.cam.z = 0.2; a.surface.invalidate(); note('zoom out');
+      a.store.setBackground({ spacing: 19 }); note('spacing');
+      a.store.setBackground({ pattern: 'grid' }); note('grid'); a.store.setBackground({ pattern: 'notebook' }); note('back to notebook');
+      await a.setPageSize('a5', 'landscape'); note('A5');
+      a.store.undo(); note('undo A5');
+      const langWas = I.currentLanguage();
+      await I.setLanguage('bn'); note('Bangla'); await I.setLanguage(langWas); note('back');
+      r.seen = seen;
+      r.allSame = seen.every((x) => x.endsWith(':2026-09-29'));
+
+      // saved, then opened "today" on another machine whose settings have the date switched off
+      const saved = JSON.parse(JSON.stringify(a.store.toJSON()));
+      r.savedDate = saved.pages && saved.pages[0] && saved.pages[0].date;
+      P.pageClock.now = day(2026, 10, 6);
+      s.pageDate = false;
+      await a.loadBoard(saved, { claimed: true });
+      await new Promise((res) => setTimeout(res, 150));
+      r.reopened = a.store.pages[0].date;
+      r.reopenUndo = a.store.undoStack.length;
+      r.modifiedKept = a.store.doc.modified === saved.modified;
+      r.modifiedWas = saved.modified; r.modifiedNow = a.store.doc.modified;
+      r.bgDate = a.store.doc.background.pageDate;
+      // and what it SHOWS is Tuesday's date, not today's
+      const pg = a.store.pages[0];
+      const top = R.notebookLayout({ x: 0, y: 0, w: pg.w, h: pg.h }, a.store.doc.background.spacing, 1).top;
+      const shown = stripPrint(paint(pg, a.store.doc.background), top);
+      r.showsTuesday = shown === stripPrint(paint({ ...pg, date: '2026-09-29' }, a.store.doc.background), top);
+      r.notToday = shown !== stripPrint(paint({ ...pg, date: '2026-10-06' }, a.store.doc.background), top);
+      r.text = R.formatPageDate(pg.date);
+    } finally {
+      P.pageClock.now = realNow;
+      s.pageDate = savedPageDate === false ? false : true; a.saveSettings();
+    }
+    return r;
+  `);
+  check('picking Notebook in the Canvas panel dates the sheet with the day it is (faked: Tue 29 Sep)',
+    nbFixed.foundTile && nbFixed.pattern === 'notebook' && nbFixed.made === '2026-09-29' && nbFixed.dateSwitch,
+    `tile found: ${nbFixed.foundTile} ("${nbFixed.tileLabel}"), pattern now ${nbFixed.pattern}, page dated ${nbFixed.made} (wanted 2026-09-29), date switch shown: ${nbFixed.dateSwitch}`);
+  check('1. the date stays fixed once written - ink, undo, redo, zoom, spacing, pattern away and back, page size and language leave it alone',
+    nbFixed.allSame === true, nbFixed.seen.join(', '));
+  check('5. the date travels with the board: saved, then opened a week later on a machine with the date switched off',
+    nbFixed.savedDate === '2026-09-29' && nbFixed.reopened === '2026-09-29' && nbFixed.bgDate !== false,
+    `saved ${nbFixed.savedDate}, opened as ${nbFixed.reopened} (both wanted 2026-09-29); board's own date switch: ${nbFixed.bgDate} (the other machine's setting must not hide it)`);
+  check('1. and what it shows is last Tuesday, not the day it was opened',
+    nbFixed.showsTuesday && nbFixed.notToday,
+    `drawn like 29 Sep: ${nbFixed.showsTuesday}; differs from today's 6 Oct: ${nbFixed.notToday}; reads "${nbFixed.text}"`);
+  check('5. opening it changes nothing - no undo step, not marked as edited',
+    nbFixed.reopenUndo === 0 && nbFixed.modifiedKept,
+    `${nbFixed.reopenUndo} thing(s) to undo (wanted 0); last-modified ${nbFixed.modifiedWas} -> ${nbFixed.modifiedNow}`);
+
+  // 2: pages added on later days carry their own day
+  const nbPages = await js(String.raw`
+    const { R, P, day, paint, stripPrint, realNow } = window.__nb;
+    const a = window.app;
+    const r = {};
+    try {
+      P.pageClock.now = day(2026, 10, 1);
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      a.store.setBackground({ pattern: 'notebook' });
+      const dates = () => a.store.pages.map((p) => (p.date || '-').slice(5)).join(' ');
+      r.day1 = dates();
+      P.pageClock.now = day(2026, 10, 2); a.addPage(0); r.day2 = dates();
+      P.pageClock.now = day(2026, 10, 3); a.duplicatePage(0); r.duplicate = dates();
+      P.pageClock.now = day(2026, 10, 4); a.addPage(0); r.middle = dates();
+      await a.deletePage(1); r.deleted = dates();
+      a.store.undo(); r.undone = dates();
+      // each sheet is drawn with its own date
+      const bg = a.store.doc.background;
+      const prints = a.store.pages.map((p) => stripPrint(paint(p, bg), R.notebookLayout({ x: 0, y: 0, w: p.w, h: p.h }, 28, 1).top));
+      r.distinct = new Set(prints).size;
+      r.pages = a.store.pages.length;
+    } finally { P.pageClock.now = realNow; }
+    return r;
+  `);
+  check('2. new pages get their own date: day 1 page, a page added on day 2',
+    nbPages.day1 === '10-01' && nbPages.day2 === '10-01 10-02',
+    `after day 1: [${nbPages.day1}] (wanted 10-01); after adding on day 2: [${nbPages.day2}] (wanted 10-01 10-02)`);
+  check('2. a duplicated page and a page inserted in the middle are dated the day they were made, and nothing else moves',
+    nbPages.duplicate === '10-01 10-03 10-02' && nbPages.middle === '10-01 10-04 10-03 10-02',
+    `after duplicating page 1 on day 3: [${nbPages.duplicate}] (wanted 10-01 10-03 10-02); after inserting after page 1 on day 4: [${nbPages.middle}] (wanted 10-01 10-04 10-03 10-02)`);
+  check('2. deleting a page and undoing it keeps every date with its own page',
+    nbPages.deleted === '10-01 10-03 10-02' && nbPages.undone === '10-01 10-04 10-03 10-02',
+    `after deleting page 2: [${nbPages.deleted}]; after undo: [${nbPages.undone}]`);
+  check('2. and each sheet is drawn with its own date',
+    nbPages.distinct === nbPages.pages && nbPages.pages === 4,
+    `${nbPages.distinct} different date drawings for ${nbPages.pages} pages with 4 different dates`);
+
+  // 3: one stored day, written the way each language writes it
+  const nbLang = await js(String.raw`
+    const { R, I, paint, stripPrint, greyBox } = window.__nb;
+    const r = {};
+    for (const l of ['en', 'bn', 'ar', 'zh-Hans', 'zh-Hant', 'es', 'pt-BR']) r[l] = R.formatPageDate('2026-09-29', l);
+    r.bad = R.formatPageDate('29/09/2026', 'en');
+    // Arabic: the date moves to the left end of the strip; the paper itself does not mirror
+    const langWas = I.currentLanguage();
+    const page = { w: 794, h: 1123, date: '2026-09-29' };
+    const L = R.notebookLayout({ x: 0, y: 0, w: 794, h: 1123 }, 28, 1, true);
+    const enImg = paint(page, {});
+    await I.setLanguage('ar');
+    const arImg = paint(page, {});
+    await I.setLanguage(langWas);
+    const g = greyBox(arImg, L.marginX + 3, 0, 794, L.top - 1);
+    r.ar = r.ar; r.arBox = g; r.arDateX = L.dateX; r.arMargin = L.marginX;
+    r.arMarginStill = (() => { const i = (500 * 794 + Math.floor(L.marginX)) * 4; const d = arImg.data; return d[i] > 170 && d[i] - d[i + 1] > 45; })();
+    r.differs = stripPrint(enImg, L.top) !== stripPrint(arImg, L.top);
+    r.langBack = I.currentLanguage() === langWas;
+    return r;
+  `);
+  const nbDigits = {
+    bn: /[০-৯]/.test(nbLang.bn) && !/[0-9]/.test(nbLang.bn),
+    ar: /[٠-٩]/.test(nbLang.ar) && !/[0-9]/.test(nbLang.ar),
+    zhHans: /2026年/.test(nbLang['zh-Hans']) && /9月/.test(nbLang['zh-Hans']),
+    zhHant: /2026年/.test(nbLang['zh-Hant']) && /9月/.test(nbLang['zh-Hant']),
+    es: /septiembre/i.test(nbLang.es) && /2026/.test(nbLang.es),
+    pt: /setembro/i.test(nbLang['pt-BR']) && /2026/.test(nbLang['pt-BR']),
+    en: /September/.test(nbLang.en) && /29/.test(nbLang.en) && /2026/.test(nbLang.en)
+  };
+  check('3. the same stored day is written in each language\'s own way and digits',
+    Object.values(nbDigits).every(Boolean) && nbLang.bad === '',
+    Object.entries(nbDigits).map(([k, v]) => `${k} ${v ? 'ok' : 'WRONG'}`).join(', ') +
+    ` — en "${nbLang.en}", bn "${nbLang.bn}", ar "${nbLang.ar}", zh-Hans "${nbLang['zh-Hans']}", zh-Hant "${nbLang['zh-Hant']}", es "${nbLang.es}", pt-BR "${nbLang['pt-BR']}"; a malformed date gives "${nbLang.bad}" (wanted nothing)`);
+  check('3. in Arabic the date sits at the left end of the strip, clear of the margin, and the paper does not mirror',
+    !!nbLang.arBox && Math.abs(nbLang.arBox.minX - nbLang.arDateX) <= 4 && nbLang.arBox.minX > nbLang.arMargin + 4 &&
+      nbLang.arBox.maxX < 794 / 2 + 200 && nbLang.arMarginStill && nbLang.differs && nbLang.langBack,
+    `date drawn x ${nbLang.arBox ? nbLang.arBox.minX + '-' + nbLang.arBox.maxX : 'nowhere'} (wanted to start near ${nbLang.arDateX?.toFixed(1)}, right of the margin at ${nbLang.arMargin?.toFixed(1)}); ` +
+    `margin still on the left: ${nbLang.arMarginStill}; drawn differently from English: ${nbLang.differs}; language put back: ${nbLang.langBack}`);
+
+  // 4 and 6: it prints, it can be switched off (everywhere), and switching it back shows the ORIGINAL day
+  const nbPrint = await js(String.raw`
+    const { R, P, day, isRed, isBlue, isGrey, greyBox, realNow } = window.__nb;
+    const a = window.app, s = a.settings;
+    const r = {};
+    const savedPageDate = s.pageDate;
+    const look = (canvas, rect, scale) => {
+      const ctx = canvas.getContext('2d');
+      const img = { w: canvas.width, h: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data };
+      const L = R.notebookLayout({ x: 0, y: 0, w: img.w, h: img.h }, a.store.doc.background.spacing || 40, scale);
+      const g = greyBox(img, L.marginX + 3, 3, img.w - 3, L.top - 1);   // inside the page edge
+      let red = 0, blue = 0;
+      for (let y = 0; y < img.h; y += 5) { const i = (y * img.w + Math.floor(L.marginX)) * 4; if (isRed(img.data[i], img.data[i + 1], img.data[i + 2])) red++; }
+      for (let y = Math.ceil(L.top); y < img.h; y++) { const i = (y * img.w + Math.floor(img.w * 0.6)) * 4; if (isBlue(img.data[i], img.data[i + 1], img.data[i + 2])) blue++; }
+      const corner = Array.from(img.data.slice(0, 3));
+      return { date: g ? g.n : 0, dateRight: g ? g.maxX : -1, red, blue, corner };
+    };
+    const wasDark = R.isDarkBoard();
+    try {
+      s.pageDate = true; a.saveSettings();
+      P.pageClock.now = day(2026, 9, 29);
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      a.store.setBackground({ pattern: 'notebook' });
+      const rect = a.store.pageRects[0];
+
+      // what a PNG export and every PDF page are made of
+      r.png = look(a.surface.renderTo(rect, 1, true), rect, 1);
+      // the PDF itself, end to end, catching the page pictures on the way
+      const { exportPdf } = await import('app://board/js/export.js');
+      const caught = [];
+      const real = a.surface.renderTo.bind(a.surface);
+      a.surface.renderTo = (...args) => { const c = real(...args); caught.push(c); return c; };
+      try { r.pdfPath = await exportPdf(a, { filePath: window.__nbPdfPath, quality: 1 }); }
+      finally { a.surface.renderTo = real; }
+      r.pdf = caught.length ? look(caught[0], rect, caught[0].width / rect.w) : null;
+      // a copied selection is a cut-out, not a sheet of paper: no ruling behind it
+      r.cutout = look(a.surface.renderTo(rect, 1, true, false), rect, 1);
+
+      // dark screen: the sheet goes dark on screen, the export stays white paper with the date
+      R.setDarkBoard(true);
+      const c = document.createElement('canvas'); c.width = 794; c.height = 1123;
+      R.drawBackground(c.getContext('2d'), a.store.doc.background, { x: 397, y: 561.5, z: 1 }, 794, 1123, a.store.pages);
+      r.darkScreen = look(c, rect, 1);
+      r.darkExport = look(a.surface.renderTo(rect, 1, true), rect, 1);
+      R.setDarkBoard(wasDark);
+
+      // 6. the switch: off hides it on screen and in the export, and new boards remember it
+      a.panels.background();
+      await new Promise((res) => setTimeout(res, 140));
+      const box = document.querySelector('#panelBody [data-page-date]');
+      r.foundSwitch = !!box; r.switchWasOn = box ? box.checked : null;
+      if (box) { box.checked = false; box.dispatchEvent(new Event('change')); }
+      await new Promise((res) => setTimeout(res, 140));
+      a.panels.close?.();
+      r.offBoard = a.store.doc.background.pageDate; r.offSetting = s.pageDate;
+      r.offExport = look(a.surface.renderTo(rect, 1, true), rect, 1);
+      const sc = document.createElement('canvas'); sc.width = 794; sc.height = 1123;
+      R.drawBackground(sc.getContext('2d'), a.store.doc.background, { x: 397, y: 561.5, z: 1 }, 794, 1123, a.store.pages);
+      r.offScreen = look(sc, rect, 1);
+
+      // a new board made while it is off: off too, but its sheet is still dated
+      P.pageClock.now = day(2026, 10, 2);
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      a.store.setBackground({ pattern: 'notebook' });
+      r.newOff = a.store.doc.background.pageDate; r.newStamp = a.store.pages[0].date;
+      // turned back on days later: it shows the day the sheet was started
+      P.pageClock.now = day(2026, 10, 9);
+      a.store.setBackground({ pageDate: true }); s.pageDate = true;
+      const rect2 = a.store.pageRects[0];
+      const back = a.surface.renderTo(rect2, 1, true);
+      r.backOn = look(back, rect2, 1);
+      const want = document.createElement('canvas'); want.width = 794; want.height = 1123;
+      const wctx = want.getContext('2d'); wctx.fillStyle = '#fff'; wctx.fillRect(0, 0, 794, 1123);
+      R.drawRuling(wctx, a.store.doc.background, { x: 397, y: 561.5, z: 1 }, 794, 1123, [{ ...a.store.pages[0], date: '2026-10-02' }]);
+      const today = document.createElement('canvas'); today.width = 794; today.height = 1123;
+      const tctx = today.getContext('2d'); tctx.fillStyle = '#fff'; tctx.fillRect(0, 0, 794, 1123);
+      R.drawRuling(tctx, a.store.doc.background, { x: 397, y: 561.5, z: 1 }, 794, 1123, [{ ...a.store.pages[0], date: '2026-10-09' }]);
+      const stripH = Math.floor(R.notebookLayout({ x: 0, y: 0, w: 794, h: 1123 }, a.store.doc.background.spacing || 40, 1).top) - 1;   // the whole top strip, date included
+      const strip = (cv) => Array.from(cv.getContext('2d').getImageData(0, 0, 794, stripH).data).join(',');
+      r.backShowsStart = strip(back) === strip(want);
+      r.backNotToday = strip(back) !== strip(today);
+    } finally {
+      R.setDarkBoard(wasDark);
+      P.pageClock.now = realNow;
+      s.pageDate = savedPageDate === false ? false : true; a.saveSettings();
+    }
+    return r;
+  `.replace('window.__nbPdfPath', JSON.stringify(path.join(OUT, 'notebook.pdf'))));
+  const nbPdfBuf = await fs.readFile(path.join(OUT, 'notebook.pdf')).catch(() => null);
+  check('4. a PNG export of notebook paper carries the ruling, the margin and the date',
+    nbPrint.png.date > 20 && nbPrint.png.red > 150 && nbPrint.png.blue > 20,
+    `date pixels ${nbPrint.png.date}, margin samples ${nbPrint.png.red}, rule pixels ${nbPrint.png.blue}`);
+  check('4. and so does every page of the PDF, which really gets written',
+    !!nbPrint.pdf && nbPrint.pdf.date > 20 && nbPrint.pdf.red > 150 && nbPrint.pdf.blue > 20 && !!nbPdfBuf && nbPdfBuf.length > 1000,
+    nbPrint.pdf ? `PDF page: date pixels ${nbPrint.pdf.date}, margin ${nbPrint.pdf.red}, rules ${nbPrint.pdf.blue}; file ${nbPdfBuf ? nbPdfBuf.length + ' bytes' : 'missing'}` : 'no page picture was rendered for the PDF');
+  check('4. a copied selection comes without the ruling behind it',
+    nbPrint.cutout.date === 0 && nbPrint.cutout.red === 0 && nbPrint.cutout.blue === 0,
+    `date ${nbPrint.cutout.date}, margin ${nbPrint.cutout.red}, rules ${nbPrint.cutout.blue} (all wanted 0)`);
+  check('dark screen: notebook paper still draws on the dark sheet, and the export stays white paper with the date',
+    nbPrint.darkScreen.blue > 20 && nbPrint.darkScreen.red > 150 && nbPrint.darkScreen.corner[0] < 100 &&
+      nbPrint.darkExport.corner.join() === '255,255,255' && nbPrint.darkExport.date > 20,
+    `on screen: corner ${nbPrint.darkScreen.corner} (wanted dark), rules ${nbPrint.darkScreen.blue}, margin ${nbPrint.darkScreen.red}; export: corner ${nbPrint.darkExport.corner} (wanted white), date pixels ${nbPrint.darkExport.date}`);
+  check('6. the "Show the date" switch is there, on by default, and turning it off hides the date on screen AND in the export',
+    nbPrint.foundSwitch && nbPrint.switchWasOn === true && nbPrint.offBoard === false && nbPrint.offScreen.date === 0 && nbPrint.offExport.date === 0 &&
+      nbPrint.offExport.blue > 20 && nbPrint.offExport.red > 150,
+    `switch found: ${nbPrint.foundSwitch}, was on: ${nbPrint.switchWasOn}; board setting after: ${nbPrint.offBoard}; date pixels on screen ${nbPrint.offScreen.date}, in export ${nbPrint.offExport.date} (both wanted 0); ruling still there: ${nbPrint.offExport.blue} rules, ${nbPrint.offExport.red} margin`);
+  check('6. new boards remember the switch, and still date their sheets',
+    nbPrint.offSetting === false && nbPrint.newOff === false && nbPrint.newStamp === '2026-10-02',
+    `remembered setting ${nbPrint.offSetting}, new board's switch ${nbPrint.newOff} (both wanted false), its sheet dated ${nbPrint.newStamp} (wanted 2026-10-02)`);
+  check('6. switching it back on days later shows the day the sheet was started, not today',
+    nbPrint.backShowsStart && nbPrint.backNotToday && nbPrint.backOn.date > 20,
+    `matches 2 Oct: ${nbPrint.backShowsStart}; differs from 9 Oct (today): ${nbPrint.backNotToday}; date pixels ${nbPrint.backOn.date}`);
+
+  // boards from before: nothing invented on opening; choosing Notebook dates them, in one undo
+  const nbOld = await js(String.raw`
+    const { R, P, day, paint, greyBox, realNow } = window.__nb;
+    const a = window.app;
+    const r = {};
+    try {
+      P.pageClock.now = day(2026, 10, 6);
+      const old = { id: 'nb-old', name: 'Ruled pad from 4.1', schema: 2, created: 1, modified: 2,
+        background: { color: '#ffffff', pattern: 'notebook' }, pages: [{ w: 794, h: 1123 }, { w: 794, h: 1123 }], objects: [], order: [] };
+      await a.loadBoard(JSON.parse(JSON.stringify(old)), { claimed: true });
+      await new Promise((res) => setTimeout(res, 120));
+      r.datesAfterOpen = a.store.pages.map((p) => p.date || '-').join(' ');
+      r.undo = a.store.undoStack.length;
+      const L = R.notebookLayout({ x: 0, y: 0, w: 794, h: 1123 }, 40, 1);
+      const g = greyBox(paint(a.store.pages[0], a.store.doc.background), L.marginX + 3, 0, 794, L.top - 1);
+      r.drawnDate = g ? g.n : 0;
+      // an old lines board turned into notebook paper: undated sheets get today, in one step
+      const lined = { ...old, id: 'nb-old2', background: { color: '#ffffff', pattern: 'lines' } };
+      await a.loadBoard(JSON.parse(JSON.stringify(lined)), { claimed: true });
+      await new Promise((res) => setTimeout(res, 120));
+      a.panels.background();
+      await new Promise((res) => setTimeout(res, 140));
+      document.querySelector('#panelBody [data-pattern="notebook"]')?.click();
+      await new Promise((res) => setTimeout(res, 140));
+      a.panels.close?.();
+      r.afterChoosing = a.store.pages.map((p) => p.date || '-').join(' ');
+      r.patternNow = a.store.doc.background.pattern;
+      a.store.undo();
+      r.afterUndo = a.store.pages.map((p) => p.date || '-').join(' ') + ' / ' + a.store.doc.background.pattern;
+      a.newBoard(true); a.store.clear();
+    } finally { P.pageClock.now = realNow; }
+    return r;
+  `);
+  check('a board from before dates existed opens untouched - no date invented, nothing to undo',
+    nbOld.datesAfterOpen === '- -' && nbOld.undo === 0 && nbOld.drawnDate === 0,
+    `dates after opening: [${nbOld.datesAfterOpen}] (wanted none), ${nbOld.undo} undo step(s) (wanted 0), date pixels drawn ${nbOld.drawnDate} (wanted 0)`);
+  check('choosing Notebook on such a board dates its sheets today, and one undo takes both back',
+    nbOld.afterChoosing === '2026-10-06 2026-10-06' && nbOld.patternNow === 'notebook' && nbOld.afterUndo === '- - / lines',
+    `after choosing: [${nbOld.afterChoosing}] pattern ${nbOld.patternNow}; after one undo: [${nbOld.afterUndo}] (wanted "- - / lines")`);
+
+  /* ---- on paper, what crosses the edge is cut off - it is not "stray" ---- */
+  /*
+   * Writing that runs up to the edge of the sheet has a pen's thickness hanging
+   * over it, and a text box can grow past it. Both are clipped, on screen and
+   * in the export, the way ink stops at the edge of real paper. They used to be
+   * counted as "off the page", so every export asked to "Fit everything on" -
+   * and saying yes shrank and re-centred ALL the writing on the page. Now only
+   * things that are off the paper altogether are asked about, and moving them
+   * never touches what is already on the page.
+   */
+  const edges = await js(String.raw`
+    const a = window.app;
+    const r = {};
+    const realChoose = a.choose;
+    const asked = [];
+    let answer = 'fit';
+    a.choose = async (title) => { asked.push(title); return answer; };
+    try {
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      const s = a.store.pageRects[0];
+      const line = (id, x0, y0, n, dx) => {
+        const pts = []; for (let i = 0; i <= n; i++) pts.push({ x: x0 + i * dx, y: y0 + i * 0.5, p: 0.5 });
+        const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+        a.store.add({ id, type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none', points: pts,
+          bbox: { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }, rotation: 0 });
+      };
+      line('mid', s.x + 200, s.y + 300, 20, 5);                       // ordinary writing in the middle
+      line('toEdge', s.x + s.w - 60, s.y + 400, 20, 2.95);            // runs right up to the edge
+      a.store.add({ id: 'longText', type: 'text', x: s.x + s.w - 250, y: s.y + 500, w: 400, h: 40,
+        rotation: 0, fontSize: 24, color: '#201f1e', text: 'a line that runs past the edge of the paper' });
+      const snap = () => JSON.stringify(['mid', 'toEdge', 'longText'].map((id) => { const o = a.store.get(id); return o.points ? o.points[0] : { x: o.x, y: o.y, w: o.w }; }));
+      const before = snap();
+      r.strayPlain = a.offPageObjects().map((o) => o.id).join(',');
+      r.strayWithEdges = a.offPageObjects({ edges: true }).map((o) => o.id).sort().join(',');
+
+      // exporting asks nothing and moves nothing
+      r.exportGoesAhead = await a.checkOffPageBeforeExport();
+      r.askedForEdges = asked.length;
+      r.unmovedByExport = snap() === before;
+      // and the Canvas panel offers no fix for them
+      a.panels.background();
+      await new Promise((res) => setTimeout(res, 140));
+      r.panelOffer = [...document.querySelectorAll('#panelBody .bg-sizes .btn')].map((b) => b.textContent.trim()).filter((x) => /onto the page/.test(x)).join(' | ');
+      a.panels.close?.();
+      // the export is the sheet, clipped: nothing of the text shows past the edge because the export ends there
+      const { exportBoundsForTest } = await import('app://board/js/export.js');
+      const eb = exportBoundsForTest(a);
+      r.exportIsSheet = Math.abs(eb.x - s.x) < 0.5 && Math.abs(eb.w - s.w) < 0.5;
+
+      // something genuinely off the paper is still asked about - and the fix moves ONLY it
+      a.store.add({ id: 'lost', type: 'shape', kind: 'rect', x: s.x + s.w + 300, y: s.y + 200, w: 120, h: 80,
+        rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 });
+      r.strayNow = a.offPageObjects().map((o) => o.id).join(',');
+      const undoBefore = a.store.undoStack.length;
+      r.exportAfterFix = await a.checkOffPageBeforeExport();
+      r.askedForLost = asked.length;
+      r.lostOnPage = a.offPageObjects().length === 0;
+      const lost = a.store.get('lost');
+      r.lostInside = lost.x >= s.x && lost.x + lost.w <= s.x + s.w;
+      r.writingUntouched = snap() === before;
+      r.oneUndo = a.store.undoStack.length - undoBefore;
+      a.store.undo();
+      r.undoPutsItBack = a.store.get('lost').x === s.x + s.w + 300 && snap() === before;
+
+      // the panel button does the same: only the stray thing moves
+      a.panels.background();
+      await new Promise((res) => setTimeout(res, 140));
+      const fit = [...document.querySelectorAll('#panelBody .bg-sizes .btn')].find((b) => /onto the page/.test(b.textContent));
+      r.panelOfferForLost = fit ? fit.textContent.trim() : '(none)';
+      if (fit) fit.click();
+      await new Promise((res) => setTimeout(res, 140));
+      a.panels.close?.();
+      r.panelMovedOnlyLost = a.offPageObjects().length === 0 && snap() === before;
+
+      // "Export the sheet anyway" leaves everything where it is
+      a.store.undo();
+      answer = 'crop';
+      r.cropGoesAhead = await a.checkOffPageBeforeExport();
+      r.cropLeftLost = a.store.get('lost').x === s.x + s.w + 300 && snap() === before;
+    } finally {
+      a.choose = realChoose;
+      a.newBoard(true); a.store.clear();
+    }
+    return r;
+  `);
+  check('writing that runs to the edge of the paper is not counted as off the page',
+    edges.strayPlain === '' && edges.strayWithEdges === 'longText,toEdge',
+    `stray: [${edges.strayPlain}] (wanted none); crossing an edge: [${edges.strayWithEdges}] (wanted longText,toEdge - still known, for turning an infinite canvas into paper)`);
+  check('so exporting asks nothing about it and moves nothing',
+    edges.exportGoesAhead === true && edges.askedForEdges === 0 && edges.unmovedByExport && edges.panelOffer === '' && edges.exportIsSheet,
+    `export went ahead: ${edges.exportGoesAhead}, questions asked: ${edges.askedForEdges} (wanted 0), writing unmoved: ${edges.unmovedByExport}, Canvas panel offer: "${edges.panelOffer}" (wanted none), export is the sheet: ${edges.exportIsSheet}`);
+  check('something off the paper altogether is still asked about, and moving it leaves the writing exactly where it was',
+    edges.strayNow === 'lost' && edges.exportAfterFix === true && edges.askedForLost === 1 && edges.lostOnPage && edges.lostInside && edges.writingUntouched && edges.oneUndo === 1 && edges.undoPutsItBack,
+    `stray: [${edges.strayNow}], asked ${edges.askedForLost} time(s) (wanted 1), now on the page: ${edges.lostOnPage}/${edges.lostInside}, writing untouched: ${edges.writingUntouched}, undo steps ${edges.oneUndo} (wanted 1), undo puts it back: ${edges.undoPutsItBack}`);
+  check('the Canvas panel\'s fit button moves only the stray thing too',
+    /^Fit 1 item onto the page$/.test(edges.panelOfferForLost) && edges.panelMovedOnlyLost,
+    `offer: "${edges.panelOfferForLost}", moved only the stray thing: ${edges.panelMovedOnlyLost}`);
+  check('"Export the sheet anyway" leaves everything where it is',
+    edges.cropGoesAhead === true && edges.cropLeftLost, `went ahead: ${edges.cropGoesAhead}, nothing moved: ${edges.cropLeftLost}`);
+
+  /* ---- erasing repaints only a band - and it must look exactly like a full repaint ---- */
+  /*
+   * Erasing repaints only the strip under the eraser. At 125% and 150% display
+   * scaling the strip's edges used to fall part-way through a device pixel,
+   * blending the background in twice along them: a faint box outline after
+   * every eraser move, plain to see on a dark board or notebook paper. Here a
+   * band is painted over a finished frame and compared, pixel by pixel, with
+   * painting the whole board - at several scales, light and dark.
+   */
+  const band = await js(String.raw`
+    const a = window.app, sf = a.surface, c = sf.canvas, ctx = sf.ctx;
+    const R = await import('app://board/js/core/render.js');
+    const realDpr = sf.dpr, wasDark = R.isDarkBoard();
+    const out = [];
+    try {
+      a.newBoard(true);
+      await new Promise((res) => setTimeout(res, 120));
+      await a.setPageSize('a4', 'portrait');
+      await new Promise((res) => setTimeout(res, 300));
+      const s = a.store.pageRects[0];
+      for (let k = 0; k < 4; k++) {
+        const pts = []; for (let i = 0; i <= 60; i++) pts.push({ x: s.x + 140 + i * 6, y: s.y + 200 + k * 30 + Math.sin(i / 3) * 8, p: 0.5 });
+        const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+        a.store.add({ id: 'bw' + k, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', points: pts,
+          bbox: { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }, rotation: 0 });
+      }
+      sf.cam.z = 1; sf.cam.x = 40 - s.x; sf.cam.y = 60 - s.y;
+      for (const look of [{ dark: false, pattern: 'none' }, { dark: true, pattern: 'none' }, { dark: true, pattern: 'notebook' }, { dark: false, pattern: 'notebook' }, { dark: false, pattern: 'grid' }]) {
+        a.store.setBackground({ pattern: look.pattern, spacing: 28 });
+        R.setDarkBoard(look.dark);
+        for (const dpr of [1, 1.25, 1.5]) {
+          sf.dpr = dpr;
+          c.width = Math.round(sf.width * dpr); c.height = Math.round(sf.height * dpr);
+          // a finished frame, then a few eraser-sized bands on top of it (nothing changed underneath)
+          sf._ink = null; sf.invalidate(); sf.draw();
+          for (let i = 0; i < 6; i++) {
+            const wx = s.x + 150 + i * 47.3, wy = s.y + 190 + i * 13.7;
+            sf.invalidateBand({ x: wx - 21.37, y: wy - 18.91, w: 43.3, h: 37.7 });
+            sf.draw();
+          }
+          const banded = ctx.getImageData(0, 0, c.width, c.height).data;
+          sf._ink = null; sf.invalidate(); sf.draw();
+          const full = ctx.getImageData(0, 0, c.width, c.height).data;
+          // the same frame with the ink hidden: anything that differs from it is ink, and ink
+          // edges may be smoothed a hair differently under a clip - that is not what this is about
+          const ink = a.store.objects.filter((o) => o.type === 'stroke');
+          ink.forEach((o) => { o.hidden = true; }); a.store.rev++;
+          sf._ink = null; sf.invalidate(); sf.draw();
+          const paper = ctx.getImageData(0, 0, c.width, c.height).data;
+          ink.forEach((o) => { delete o.hidden; }); a.store.rev++;
+          // ink, grown by two pixels so the faintest smoothing at its edge counts as ink too
+          const W = c.width, H = c.height, inkMask = new Uint8Array(W * H);
+          for (let p = 0, i = 0; p < W * H; p++, i += 4) {
+            if (full[i] === paper[i] && full[i + 1] === paper[i + 1] && full[i + 2] === paper[i + 2]) continue;
+            const x = p % W, y = (p / W) | 0;
+            for (let yy = Math.max(0, y - 2); yy <= Math.min(H - 1, y + 2); yy++) for (let xx = Math.max(0, x - 2); xx <= Math.min(W - 1, x + 2); xx++) inkMask[yy * W + xx] = 1;
+          }
+          let diff = 0, worst = 0, inkDiff = 0; const where = [];
+          for (let i = 0; i < full.length; i += 4) {
+            const d = Math.max(Math.abs(full[i] - banded[i]), Math.abs(full[i + 1] - banded[i + 1]), Math.abs(full[i + 2] - banded[i + 2]));
+            if (d <= 2) continue;
+            if (inkMask[i / 4]) { inkDiff++; continue; }
+            diff++;
+            if (d > worst) worst = d;
+            if (where.length < 3) { const p = i / 4; where.push('(' + (p % W) + ',' + ((p / W) | 0) + ') full ' + [full[i], full[i + 1], full[i + 2]] + ' vs band ' + [banded[i], banded[i + 1], banded[i + 2]]); }
+          }
+          out.push({ look: (look.dark ? 'dark' : 'light') + ' ' + look.pattern, dpr, diff, worst, inkDiff, where });
+        }
+      }
+    } finally {
+      R.setDarkBoard(wasDark);
+      sf.dpr = realDpr; sf.resize(true); a.newBoard(true); a.store.clear(); sf.invalidate(); sf.draw();
+    }
+    return out;
+  `);
+  const bandBad = band.filter((b) => b.diff > 0);
+  check('a band repainted under the eraser leaves no box outlines - the paper is pixel-for-pixel a full repaint, light, dark and notebook, at 100%, 125% and 150%',
+    band.length === 15 && !bandBad.length,
+    bandBad.length ? bandBad.map((b) => `${b.look} @${b.dpr}x: ${b.diff} pixels differ (worst by ${b.worst}; e.g. ${b.where.join(', ')})`).join('; ')
+      : band.map((b) => `${b.look} @${b.dpr}x ok (ink-edge pixels smoothed differently: ${b.inkDiff})`).join(', '));
+
+  /* ---- a window a fraction of a pixel wide is painted to its very last column ---- */
+  const lastCol = await js(String.raw`
+    const a = window.app, sf = a.surface, c = sf.canvas;
+    const realDpr = sf.dpr, out = [];
+    a.newBoard(true);
+    try {
+      for (const dpr of [1.25, 1.5]) {
+        c.style.width = (sf.canvas.parentElement.clientWidth - 0.6) + 'px';   // e.g. 1426.4 CSS px, as a real window can be
+        sf.width = c.clientWidth; sf.dpr = dpr;
+        c.width = Math.round(c.getBoundingClientRect().width * dpr); sf.height = c.clientHeight; c.height = Math.round(c.getBoundingClientRect().height * dpr);
+        sf.repaintAll(); sf.draw();                                          // ONE frame: no second coat to hide a gap
+        const y = Math.round(c.height / 2);
+        const last = sf.ctx.getImageData(c.width - 1, y, 1, 1).data, before = sf.ctx.getImageData(c.width - 3, y, 1, 1).data;
+        out.push({ dpr, buffer: c.width, css: +c.getBoundingClientRect().width.toFixed(2), last: [last[0], last[1], last[2]].join(','), inside: [before[0], before[1], before[2]].join(',') });
+      }
+    } finally {
+      c.style.width = ''; sf.dpr = realDpr; sf.resize(true); sf.repaintAll(); sf.draw();
+    }
+    return out;
+  `);
+  check('the board is painted right to the last pixel column, even when the window is a fraction of a pixel wide',
+    lastCol.every((r) => r.last === r.inside),
+    lastCol.map((r) => `@${r.dpr}x, ${r.css} CSS px = ${r.buffer} device px: last column ${r.last}, just inside ${r.inside}`).join('; '));
+
   check('and pressing that button brings the work onto the page, losing none of it',
     sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
     sizeMenu.offerGoneWhenNothingStray === true,
@@ -13826,8 +14495,26 @@ module.exports.run = async (win, app) => {
       };
       const outer = side === 'right' ? band(W - 6) : band(0);
       const inner = side === 'right' ? band(W - 120) : band(114);
-      return { outer: +outer.toFixed(2), inner: +inner.toFixed(2), diff: +(inner - outer).toFixed(2) };
+      // the outermost few columns one by one, so a failure says whether it is a soft shadow (fading in) or a hard strip
+      const cols = [];
+      for (let k = 0; k < 6; k++) {
+        const x = side === 'right' ? W - 1 - k : k;
+        const px = img.crop({ x, y: Math.round(H * 0.5), width: 1, height: 1 }).toBitmap();
+        cols.push(`${px[2]},${px[1]},${px[0]}`);
+      }
+      return { outer: +outer.toFixed(2), inner: +inner.toFixed(2), diff: +(inner - outer).toFixed(2), cols: cols.join(' | '), W, H };
     };
+    // what is actually sitting at the window edge, in the page and on the board canvas
+    const edgeFacts = (side) => js(`
+      const x = ${side === 'right'} ? window.innerWidth - 2 : 1, y = Math.round(window.innerHeight * 0.5);
+      const hit = document.elementFromPoint(x, y);
+      const p = document.getElementById('panel'), cs = getComputedStyle(p), r = p.getBoundingClientRect();
+      const sf = window.app.surface, c = sf.canvas;
+      const d = sf.ctx.getImageData(Math.min(c.width - 1, Math.round(x * sf.dpr)), Math.round(y * sf.dpr), 1, 1).data;
+      return { hit: hit ? (hit.id || hit.tagName) + (hit.className ? '.' + String(hit.className).split(' ').join('.') : '') : '(nothing)',
+        panel: Math.round(r.left) + '-' + Math.round(r.right) + ' ' + cs.visibility + ' shadow ' + cs.boxShadow,
+        canvasPixel: [d[0], d[1], d[2]].join(','), canvas: c.width + 'x' + c.height + ' @' + sf.dpr + ' css ' + Math.round(c.getBoundingClientRect().width) };
+    `);
     const state = () => js(`
       const p = document.getElementById('panel'); const r = p.getBoundingClientRect();
       const cx = Math.min(window.innerWidth - 2, Math.max(1, r.left + r.width / 2)), cy = r.top + 120;
@@ -13855,13 +14542,27 @@ module.exports.run = async (win, app) => {
         await sleep(120);
       }
       const clicks = await js(`return window.__panelClicks || 0;`);
-      await js(`window.app.panels.close();`);
-      await sleep(40);
-      const midSlide = await state();
+      // "still sliding" is checked a frame after closing, inside the page, so a busy test
+      // machine's round trip cannot land after the slide has already finished
+      const midSlide = await js(`
+        const t0 = performance.now();
+        window.app.panels.close();
+        await new Promise((r) => requestAnimationFrame(() => r()));
+        const p = document.getElementById('panel');
+        return { visibility: getComputedStyle(p).visibility, ms: Math.round(performance.now() - t0) };
+      `);
       await sleep(400);
       const closed = await state();
-      const pixels = await edge(side);
-      return { opened, clicks, midSlide, closed, pixels };
+      let pixels = await edge(side);
+      const facts = await edgeFacts(side);
+      // if the edge is off, look again after a wait and after a full repaint, to tell a slow slide from a stale board picture
+      let later = null, repainted = null;
+      if (Math.abs(pixels.diff) >= 1.5) {
+        await sleep(800); later = await edge(side);
+        await js(`window.app.surface.repaintAll(); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));`);
+        repainted = await edge(side);
+      }
+      return { opened, clicks, midSlide, closed, pixels, facts, later, repainted };
     };
     const en = await panelRound('right');
     await js(`const i = await import('app://board/js/i18n.js'); await i.setLanguage('ar');`);
@@ -13876,10 +14577,12 @@ module.exports.run = async (win, app) => {
         `mouse clicks that reached its first button: ${r.clicks} (panel ${r.opened.left}-${r.opened.right} of ${r.opened.vw}, dir "${r.opened.dir}")`);
       check(`${name}: closing still slides, and then the panel is gone — no shadow, nothing to tab to`,
         r.midSlide.visibility === 'visible' && !r.closed.open && r.closed.visibility === 'hidden' && !r.closed.focusInside,
-        `40ms into closing: ${r.midSlide.visibility}; after: ${r.closed.visibility}, focus inside ${r.closed.focusInside}`);
+        `${r.midSlide.ms}ms into closing (one frame): ${r.midSlide.visibility}; after: ${r.closed.visibility}, focus inside ${r.closed.focusInside}`);
       check(`${name}: the window edge is the same colour as the board beside it`,
         Math.abs(r.pixels.diff) < 1.5,
-        `edge band ${r.pixels.outer}, board 120px in ${r.pixels.inner} — a gap over 1.5 is the old shadow strip`);
+        `edge band ${r.pixels.outer}, board 120px in ${r.pixels.inner} — a gap over 1.5 is the old shadow strip; ` +
+        `outermost columns ${r.pixels.cols}; at the edge: ${r.facts.hit}; panel ${r.facts.panel}; board canvas there ${r.facts.canvasPixel} (${r.facts.canvas}, window ${r.pixels.W}x${r.pixels.H})` +
+        (r.later ? `; 0.8s later edge ${r.later.outer} vs ${r.later.inner}; after a full repaint ${r.repainted.outer} vs ${r.repainted.inner}` : ''));
     }
   }
 

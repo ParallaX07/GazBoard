@@ -8,7 +8,7 @@ import { objectRuns, layoutRich, fitRichSize, drawRichLines } from './richtext.j
 import { mathEntry, hasMaths } from './maths.js';
 
 import { fontStack } from '../ui/palettes.js';
-import { t } from '../i18n.js';
+import { t, currentLanguage, direction } from '../i18n.js';
 
 export const FONT = fontStack('ui');
 export const HAND_FONT = fontStack('hand');
@@ -72,13 +72,105 @@ const lineFrom = (origin, step, from) => origin + Math.ceil((from - origin) / st
  */
 export const PATTERN_SPACINGS = [19, 28, 40, 56];   // ~5, 7.5, 10.5 and 15 mm on paper; 19 matches Xournal++'s 5 mm graph paper
 
-function drawPattern(ctx, bg, cam, w, h, anchor, bounds) {
+/* ---------- notebook paper ----------
+ *
+ * Pale blue rules, a red margin down the left and a clear strip across the
+ * top where the date the sheet was started sits, small and grey. Everything
+ * is measured in millimetres of paper so it prints the size it looks. The
+ * board itself never mirrors - Arabic only moves the date to the other end of
+ * the strip, because text belongs to the reader but the paper belongs to the
+ * board and has to look the same to everyone who opens it.
+ */
+export const NOTEBOOK = { line: '#8db6e2', margin: '#e0707f', date: '#8a8886', marginMm: 25, headMm: 22, dateMm: 3.8, edgeMm: 15 };
+const MM = 96 / 25.4;
+
+/**
+ * Where everything on one sheet of notebook paper goes, in screen pixels.
+ * Exported so the suite can check the date really lands in the strip.
+ * @param {{x:number,y:number,w:number,h:number}} sheet  the sheet on screen
+ */
+export function notebookLayout(sheet, base, z, rtl = false) {
+  const head = Math.max(3 * base, NOTEBOOK.headMm * MM) * z;
+  const top = sheet.y + head;                                // the first rule
+  const marginX = sheet.x + NOTEBOOK.marginMm * MM * z;
+  const fontPx = NOTEBOOK.dateMm * MM * z;
+  const baseline = top - Math.max(0.3 * base, 2.5 * MM) * z;
+  const dateX = rtl ? marginX + 5 * MM * z : sheet.x + sheet.w - NOTEBOOK.edgeMm * MM * z;
+  return { top, marginX, fontPx, baseline, dateX, align: rtl ? 'left' : 'right' };
+}
+
+const LOCALE_FOR = { en: null, bn: 'bn-BD', ar: 'ar-u-nu-arab', 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', es: 'es', 'pt-BR': 'pt-BR' };
+const dateFormats = new Map();
+
+/**
+ * "2026-10-06" as the reader's language writes it: Tue, October 6, 2026 /
+ * মঙ্গল, ৬ অক্টোবর, ২০২৬ / الثلاثاء، ٦ أكتوبر ٢٠٢٦. The stored day never
+ * changes; only the way it is written does. English follows the computer's
+ * own English (US or UK order).
+ */
+export function formatPageDate(iso, lang = currentLanguage()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return '';
+  let loc = LOCALE_FOR[lang];
+  if (loc === undefined) loc = lang;
+  if (loc === null) {
+    const sys = (typeof navigator !== 'undefined' && navigator.language) || 'en';
+    loc = /^en\b/i.test(sys) ? sys : 'en';
+  }
+  let f = dateFormats.get(loc);
+  if (!f) {
+    try { f = new Intl.DateTimeFormat(loc, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch { f = new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }); }
+    dateFormats.set(loc, f);
+  }
+  // noon, so no timezone can tip it into the day before or after
+  return f.format(new Date(+m[1], +m[2] - 1, +m[3], 12));
+}
+
+function drawNotebook(ctx, bg, cam, base, step, anchor, bounds, page, x0, y0, x1, y1) {
+  const z = cam.z;
+  ctx.strokeStyle = NOTEBOOK.line;
+  ctx.globalAlpha = 0.9;
+  if (!anchor) {
+    // the infinite canvas has no top and no left edge: just the blue rules
+    const oy = ((cam.y % step) + step) % step;
+    ctx.beginPath();
+    for (let y = lineFrom(oy, step, y0); y < y1; y += step) { ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(x1, Math.round(y) + 0.5); }
+    ctx.stroke();
+    return;
+  }
+  const rtl = direction() === 'rtl';
+  const L = notebookLayout(bounds || { x: anchor.x, y: anchor.y, w: x1 - anchor.x, h: y1 - anchor.y }, base, z, rtl);
+  ctx.beginPath();
+  for (let y = lineFrom(L.top, step, Math.max(y0, L.top)); y < y1; y += step) { ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(x1, Math.round(y) + 0.5); }
+  ctx.stroke();
+
+  ctx.strokeStyle = NOTEBOOK.margin;
+  ctx.lineWidth = clamp(0.3 * MM * z, 1, 2.5);
+  ctx.beginPath();
+  ctx.moveTo(L.marginX, y0); ctx.lineTo(L.marginX, y1);
+  ctx.stroke();
+
+  // the day the sheet was started - never today's date standing in for it
+  if (bg.pageDate === false || !page?.date || L.fontPx < 6) return;
+  const text = formatPageDate(page.date);
+  if (!text) return;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = NOTEBOOK.date;
+  ctx.font = `${L.fontPx.toFixed(2)}px ${FONT}`;
+  ctx.direction = rtl ? 'rtl' : 'ltr';
+  ctx.textAlign = L.align;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, L.dateX, L.baseline);
+}
+
+function drawPattern(ctx, bg, cam, w, h, anchor, bounds, page, exact = false) {
   const pattern = bg.pattern || 'none';
   if (pattern === 'none') return;
 
   const base = PATTERN_SPACINGS.includes(bg.spacing) ? bg.spacing : 40;   // world spacing
   let step = base * cam.z;
-  if (anchor) {
+  if (anchor || exact) {
     /*
      * A sheet of paper has its ruling printed on it: true to size at every
      * zoom, so the lines sit the same distance apart on screen, in a PDF and
@@ -110,7 +202,9 @@ function drawPattern(ctx, bg, cam, w, h, anchor, bounds) {
   ctx.fillStyle = color;
   ctx.lineWidth = 1;
 
-  if (pattern === 'grid' || pattern === 'lines' || pattern === 'columns') {
+  if (pattern === 'notebook') {
+    drawNotebook(ctx, bg, cam, base, step, anchor, bounds, page, x0, y0, x1, y1);
+  } else if (pattern === 'grid' || pattern === 'lines' || pattern === 'columns') {
     ctx.globalAlpha = 0.55;
     ctx.beginPath();
     if (pattern !== 'lines') for (let x = lineFrom(ox, step, x0); x < x1; x += step) { ctx.moveTo(Math.round(x) + 0.5, y0); ctx.lineTo(Math.round(x) + 0.5, y1); }
@@ -159,8 +253,8 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
   ctx.fillStyle = shadeOf(boardPaint(bg.color));
   ctx.fillRect(0, 0, w, h);
 
-  for (const sheet of sheets) {
-    if (sheet.x > w || sheet.y > h || sheet.x + sheet.w < 0 || sheet.y + sheet.h < 0) continue;
+  sheets.forEach((sheet, i) => {
+    if (sheet.x > w || sheet.y > h || sheet.x + sheet.w < 0 || sheet.y + sheet.h < 0) return;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.20)';
     ctx.shadowBlur = Math.min(26, 10 + cam.z * 8);
@@ -173,11 +267,33 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
     ctx.beginPath();
     ctx.rect(sheet.x, sheet.y, sheet.w, sheet.h);
     ctx.clip();
-    drawPattern(ctx, bg, cam, w, h, { x: sheet.x, y: sheet.y }, sheet);
+    drawPattern(ctx, bg, cam, w, h, { x: sheet.x, y: sheet.y }, sheet, pages[i]);
     ctx.restore();
 
     strokePageEdge(ctx, sheet);
-  }
+  });
+  ctx.restore();
+}
+
+/**
+ * Just the ruling, for an export: the lines, squares, dots or notebook paper
+ * the board shows, without the desk, shadows and page edges that only make
+ * sense on screen. A pad is ruled sheet by sheet from each sheet's own corner,
+ * exactly as it is drawn on screen, so the printout matches what was written on.
+ */
+export function drawRuling(ctx, bg, cam, w, h, pages = null) {
+  if (!bg || !bg.pattern || bg.pattern === 'none') return;
+  ctx.save();
+  const sheets = pages && pages.length ? pageRects(pages, cam) : [];
+  // an export is printed, so even an infinite board's ruling comes out true to size
+  if (!sheets.length) drawPattern(ctx, bg, cam, w, h, null, null, null, true);
+  else sheets.forEach((sheet, i) => {
+    if (sheet.x > w || sheet.y > h || sheet.x + sheet.w < 0 || sheet.y + sheet.h < 0) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(sheet.x, sheet.y, sheet.w, sheet.h); ctx.clip();
+    drawPattern(ctx, bg, cam, w, h, { x: sheet.x, y: sheet.y }, sheet, pages[i]);
+    ctx.restore();
+  });
   ctx.restore();
 }
 

@@ -8,7 +8,7 @@
 // in the app mutates the document directly.
 
 import { uid, unionBox } from './util.js';
-import { pagesFrom, pageRects } from './pages.js';
+import { pagesFrom, pageRects, cleanPage } from './pages.js';
 import { t } from '../i18n.js';
 
 export const CLIENT_ID = uid('c');
@@ -219,14 +219,14 @@ export class Store {
    */
   setPages(pages, label = 'page size') {
     const before = this.doc.pages.map((p) => ({ ...p }));
-    const after = (pages || []).map((p) => ({ w: p.w, h: p.h }));
+    const after = (pages || []).map(cleanPage);
     this.commit(label, [{ t: 'doc', before: { pages: before }, after: { pages: after } }]);
   }
 
   /** An op that swaps the page list - for callers batching page edits with object moves. */
   pagesOp(pages) {
     return { t: 'doc', before: { pages: this.doc.pages.map((p) => ({ ...p })) },
-      after: { pages: (pages || []).map((p) => ({ w: p.w, h: p.h })) } };
+      after: { pages: (pages || []).map(cleanPage) } };
   }
 
   setBackground(patch) {

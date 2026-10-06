@@ -10,7 +10,7 @@ import { Interaction } from './core/tools.js';
 import { InkTrail } from './core/inktrail.js';
 import { pick, ghost } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
-import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP } from './core/pages.js';
+import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP, todayStamp } from './core/pages.js';
 import { isNewer } from './core/version.js';
 import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
@@ -65,7 +65,7 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -688,6 +688,8 @@ class App {
      */
     const spacing = this.settings.patternSpacing;
     if (spacing && spacing !== 40) { this.store.doc.background.spacing = spacing; this.store.rev++; }
+    // the same goes for the date at the top of notebook paper: switched off once, off for every new board
+    if (this.settings.pageDate === false) { this.store.doc.background.pageDate = false; this.store.rev++; }
     const want = this.settings.rememberCanvas ? this.settings.canvasDefaults : null;
     if (!want) return;
     const bg = {};
@@ -854,7 +856,7 @@ class App {
   async checkStrayContent(data) {
     if ((data?.schema ?? 1) >= 2) return;
     if (!this.pageCount) return;
-    const stray = this.offPageObjects();
+    const stray = this.offPageObjects({ edges: true });
     if (!stray.length) return;
 
     const answer = await this.choose(
@@ -1954,7 +1956,8 @@ class App {
     let b = this.surface.selectionBounds();
     b = { x: b.x - 24, y: b.y - 24, w: b.w + 48, h: b.h + 48 };
     const s = Math.min(2, 8000 / Math.max(b.w, b.h));
-    const image = this.surface.renderTo(b, s, true).toDataURL('image/png');
+    // a cut-out of the selection, not a sheet of paper: no ruling behind it
+    const image = this.surface.renderTo(b, s, true, false).toDataURL('image/png');
     const ok = await window.board.clipboardWrite({ image });
     this.toast(ok ? t('Copied as a picture') : t('Could not copy to the clipboard'));
     return ok;
@@ -2552,7 +2555,15 @@ class App {
     const size = pageWorldSize(paperId, orientation);
     if (!size) return;
     const count = Math.max(1, this.pageCount);
-    const next = Array.from({ length: count }, () => ({ ...size }));
+    // a new size, not a new sheet: each page keeps the day it was started, and
+    // a canvas that is only now becoming paper starts its first sheet today
+    const was = this.pages;
+    const next = Array.from({ length: count }, (_, i) => {
+      const p = { ...size };
+      const date = was[i] ? was[i].date : todayStamp();
+      if (date) p.date = date;
+      return p;
+    });
 
     // objects ride their sheet to its new place in the strip
     const ops = [this.store.pagesOp(next)];
@@ -2574,7 +2585,7 @@ class App {
      * discovered at print time, and the fix already exists, so the note
      * carries it: one press brings everything onto the page.
      */
-    const stray = this.offPageObjects();
+    const stray = this.offPageObjects({ edges: true });
     const orient = orientation === 'portrait' ? t('portrait') : orientation === 'landscape' ? t('landscape') : orientation;
     const label = count > 1
       ? t('{paper} {orientation} — {count} pages', { paper: paperById(paperId).label, orientation: orient, count })
@@ -2626,7 +2637,9 @@ class App {
   addPage(index = this.currentPageIndex(), { copyOf = -1 } = {}) {
     if (!this.pageCount) { this.toast(t('This board is an infinite canvas')); return false; }
     const at = clamp(index + 1, 0, this.pageCount);
-    const size = { ...this.pages[clamp(index, 0, this.pageCount - 1)] };
+    const like = this.pages[clamp(index, 0, this.pageCount - 1)];
+    // a new sheet - a copy too - is written today, so it carries today's date
+    const size = { w: like.w, h: like.h, date: todayStamp() };
     const next = this.pages.map((p) => ({ ...p }));
     next.splice(at, 0, size);
 
@@ -2705,7 +2718,23 @@ class App {
   prevPage() { this.goToPage(this.currentPageIndex() - 1); }
 
   /** Everything that is not fully inside some sheet. Empty on an infinite board. */
-  offPageObjects() {
+  /**
+   * What is not on the paper.
+   *
+   * On a pad the sheet is the edge of the world: whatever crosses it is cut
+   * off, on screen and in every export alike, the way ink stops at the edge of
+   * real paper. So writing that runs up to - or a little over - the edge is NOT
+   * stray; the part beyond is simply gone, and asking about it (or worse,
+   * offering to shrink and re-centre the whole page to "rescue" a pen's
+   * thickness) is wrong. Only things that sit off every sheet altogether are
+   * stray: they show on the desk but would vanish from an export.
+   *
+   * `{ edges: true }` also counts things that merely cross an edge. That is the
+   * right question at exactly two moments - an infinite canvas being turned
+   * into paper, and a board from before pages clipped - when the content was
+   * placed with no edge in sight and cutting it off would be a surprise.
+   */
+  offPageObjects({ edges = false } = {}) {
     const pages = this.pages;
     if (!pages.length) return [];
     const rects = pageRects(pages);
@@ -2713,9 +2742,36 @@ class App {
       const b = boundsOf(o);
       const i = pageIndexForBox(pages, b);
       if (i < 0) return true;
+      if (!edges) return false;
       const r = rects[i];
       return b.x < r.x - 0.5 || b.y < r.y - 0.5 || b.x + b.w > r.x + r.w + 0.5 || b.y + b.h > r.y + r.h + 0.5;
     });
+  }
+
+  /**
+   * Slide only the given stray things onto the sheet nearest each, shrinking
+   * one only if it is bigger than the sheet. Nothing already on the paper is
+   * moved - this must never re-centre someone's writing. One undo.
+   */
+  bringOntoPages(stray = this.offPageObjects(), margin = 24) {
+    const pages = this.pages;
+    if (!pages.length || !stray.length) return false;
+    const rects = pageRects(pages);
+    this.store.updateMany(stray.map((o) => o.id), (o) => {
+      const b = boundsOf(o);
+      let i = pageIndexForBox(pages, b);
+      if (i < 0) i = nearestPageIndex(pages, b.x + b.w / 2, b.y + b.h / 2);
+      const r = { x: rects[i].x + margin, y: rects[i].y + margin, w: rects[i].w - margin * 2, h: rects[i].h - margin * 2 };
+      const copy = structuredClone(o);
+      const s = Math.min(r.w / b.w, r.h / b.h, 1);
+      if (s < 1) scaleObject(copy, s, s, b.x + b.w / 2, b.y + b.h / 2);
+      const { dx, dy } = offsetIntoRect(boundsOf(copy), r);
+      translateObject(copy, dx, dy);
+      return patchFor(o, copy);
+    }, 'fit to pages');
+    this.setSelection([]);
+    this.toast(stray.length === 1 ? t('Brought one thing back onto the paper') : t('Brought {n} things back onto the paper', { n: stray.length }));
+    return true;
   }
 
   /**
@@ -2755,23 +2811,9 @@ class App {
       return true;
     }
 
-    const stray = this.offPageObjects();
+    const stray = this.offPageObjects({ edges: true });
     if (!stray.length) { this.toast(t('Everything is already on a page')); return false; }
-    this.store.updateMany(stray.map((o) => o.id), (o) => {
-      const b = boundsOf(o);
-      let i = pageIndexForBox(pages, b);
-      if (i < 0) i = nearestPageIndex(pages, b.x + b.w / 2, b.y + b.h / 2);
-      const r = { x: rects[i].x + margin, y: rects[i].y + margin, w: rects[i].w - margin * 2, h: rects[i].h - margin * 2 };
-      const copy = structuredClone(o);
-      const s = Math.min(r.w / b.w, r.h / b.h, 1);
-      if (s < 1) scaleObject(copy, s, s, b.x + b.w / 2, b.y + b.h / 2);
-      const { dx, dy } = offsetIntoRect(boundsOf(copy), r);
-      translateObject(copy, dx, dy);
-      return patchFor(o, copy);
-    }, 'fit to pages');
-    this.setSelection([]);
-    this.toast(stray.length === 1 ? t('Brought one thing back onto the paper') : t('Brought {n} things back onto the paper', { n: stray.length }));
-    return true;
+    return this.bringOntoPages(stray, margin);
   }
 
   /** Sit one sheet in the window, with a little room around it. */
@@ -2814,12 +2856,12 @@ class App {
     const n = off.length;
     const answer = await this.choose(
       n === 1 ? t('One thing is off the page') : t('{n} things are off the page', { n }),
-      t('Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.'),
-      [{ id: 'fit', label: t('Fit everything on'), primary: true },
+      t('Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.'),
+      [{ id: 'fit', label: t('Move them onto the page'), primary: true },
        { id: 'crop', label: t('Export the sheet anyway') }]
     );
     if (answer === null) return false;
-    if (answer === 'fit') this.fitContentToPage();
+    if (answer === 'fit') this.bringOntoPages(off);
     return true;
   }
 

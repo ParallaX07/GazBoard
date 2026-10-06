@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "العناصر التي أُعيدت إلى الورقة: {n}",
  "One thing is off the page": "عنصر واحد خارج الصفحة",
  "{n} things are off the page": "عناصر خارج الصفحة: {n}",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "يشمل التصدير الورقة فقط، فسيُستبعد كل ما يقع خارجها. يمكنك تصغير اللوحة لتتسع أولًا، أو تصدير الورقة كما هي.",
- "Fit everything on": "احتواء كل شيء",
  "Export the sheet anyway": "تصدير الورقة على أي حال",
  "Nothing on the board to export": "لا شيء على اللوحة لتصديره",
  "Cancel": "إلغاء",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "تُستورد الشرائح المتحركة كما تبدو بعد آخر نقرة",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "تشغيل (افتراضي): تُستورد كل شريحة كما تبدو بعد انتهاء كل النقرات — ما يتلاشى يختفي، وما يتحرك يكون حيث يتوقف، وما يكبر يكون بحجمه الكامل. إيقاف: الشريحة كما هي قبل النقرة الأولى، وكل ما عليها ظاهر معًا.",
  "Spacing": "التباعد",
- "About {mm} mm apart when printed. New boards use this spacing too.": "نحو {mm} مم بين الخطوط عند الطباعة. اللوحات الجديدة تستخدم هذا التباعد أيضًا."
+ "About {mm} mm apart when printed. New boards use this spacing too.": "نحو {mm} مم بين الخطوط عند الطباعة. اللوحات الجديدة تستخدم هذا التباعد أيضًا.",
+ "Notebook": "دفتر",
+ "Show the date": "إظهار التاريخ",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "تعرض كل صفحة اليوم الذي بدأت فيه، حسب تقويم هذا الكمبيوتر. ويبقى التاريخ كما هو عند فتح اللوحة لاحقًا.",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "يغطي التصدير الورقة فقط، لذا سيُستبعد كل ما يقع خارجها. يمكنك نقل تلك العناصر إلى الصفحة أولًا - دون تحريك أي شيء موجود عليها - أو تصدير الورقة كما هي.",
+ "Move them onto the page": "انقلها إلى الصفحة"
 }

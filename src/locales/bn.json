@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "{n}টি জিনিস কাগজের ভেতরে ফিরিয়ে আনা হয়েছে",
  "One thing is off the page": "একটি জিনিস পেজের বাইরে আছে",
  "{n} things are off the page": "{n}টি জিনিস পেজের বাইরে আছে",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "এক্সপোর্টে শুধু শিটটুকু আসে, তাই এর বাইরের কিছু বাদ পড়বে। আগে বোর্ড ছোট করে ফিট করে নিতে পারেন, অথবা শিট যেমন আছে তেমনই এক্সপোর্ট করতে পারেন।",
- "Fit everything on": "সবকিছু ফিট করুন",
  "Export the sheet anyway": "তবুও শিটটি এক্সপোর্ট করুন",
  "Nothing on the board to export": "বোর্ডে এক্সপোর্ট করার মতো কিছু নেই",
  "Cancel": "বাতিল",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "অ্যানিমেটেড স্লাইড আসবে শেষ ক্লিকের পরের চেহারায়",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "চালু (ডিফল্ট): প্রতিটি স্লাইড আসে সব ক্লিক শেষ হলে যেমন দেখায় তেমন — যা ফেড হয়ে চলে যায় তা থাকে না, যা সরে তা থামার জায়গায় থাকে, যা বড় হয় তা পুরো মাপে থাকে। বন্ধ: প্রথম ক্লিকের আগের স্লাইড, সবকিছু একসাথে।",
  "Spacing": "ব্যবধান",
- "About {mm} mm apart when printed. New boards use this spacing too.": "প্রিন্ট করলে প্রায় {mm} মিমি ফাঁক থাকবে। নতুন বোর্ডেও এই ব্যবধান থাকবে।"
+ "About {mm} mm apart when printed. New boards use this spacing too.": "প্রিন্ট করলে প্রায় {mm} মিমি ফাঁক থাকবে। নতুন বোর্ডেও এই ব্যবধান থাকবে।",
+ "Notebook": "নোটবুক",
+ "Show the date": "তারিখ দেখাও",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "প্রতিটি পেজে এই কম্পিউটারের ক্যালেন্ডার অনুযায়ী সেটি শুরু করার দিনটি দেখায়। পরে বোর্ড খুললেও তারিখটি একই থাকে।",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "এক্সপোর্টে শুধু পেজটুকুই আসে, তাই এর বাইরে যা আছে তা বাদ পড়বে। আগে সেগুলো পেজে সরিয়ে আনতে পারেন - পেজে যা আছে তা নড়বে না - অথবা পেজটি যেমন আছে তেমনই এক্সপোর্ট করতে পারেন।",
+ "Move them onto the page": "সেগুলো পেজে সরিয়ে আনো"
 }

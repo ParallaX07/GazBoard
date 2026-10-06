@@ -125,7 +125,35 @@ export function toScreen(r, cam) {
  * Boards written before multi-page carry a single `page:{w,h}`.
  */
 export function pagesFrom(data) {
-  if (Array.isArray(data?.pages)) return data.pages.filter((p) => p && p.w > 0 && p.h > 0).map((p) => ({ w: p.w, h: p.h }));
-  if (data?.page && data.page.w > 0 && data.page.h > 0) return [{ w: data.page.w, h: data.page.h }];
+  if (Array.isArray(data?.pages)) return data.pages.filter((p) => p && p.w > 0 && p.h > 0).map(cleanPage);
+  if (data?.page && data.page.w > 0 && data.page.h > 0) return [cleanPage(data.page)];
   return [];
+}
+
+/* ---------- the date a sheet was started ----------
+ *
+ * Every sheet remembers the day it was added, the way you write the date at
+ * the top of a notebook page: once, and it stays. It is kept as a plain
+ * YYYY-MM-DD so it means the same day in every language and on every machine,
+ * and only turned into "৬ অক্টোবর" or "6 October" at the moment it is drawn.
+ * Sheets from boards made before this simply have none, and opening such a
+ * board never invents one - that would be editing someone's file behind
+ * their back.
+ */
+export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Where "today" comes from. The suite swaps `now` to pretend it is another day. */
+export const pageClock = { now: () => new Date() };
+
+/** Today (or `d`) as YYYY-MM-DD, in local time - the day on the person's own calendar. */
+export function todayStamp(d = pageClock.now()) {
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+}
+
+/** A sheet reduced to what is kept on disk: its size, and its date when it has one. */
+export function cleanPage(p) {
+  const out = { w: p.w, h: p.h };
+  if (typeof p.date === 'string' && DATE_RE.test(p.date)) out.date = p.date;
+  return out;
 }

@@ -10,6 +10,7 @@ import { exportBoards } from '../board-export.js';
 import { BOARD_COLORS, PATTERNS } from './palettes.js';
 import { inkTrailSupported } from '../core/inktrail.js';
 import { PATTERN_SPACINGS } from '../core/render.js';
+import { todayStamp } from '../core/pages.js';
 import * as F from '../core/folders.js';
 
 /**
@@ -125,9 +126,20 @@ export function createPanels(app) {
         const b = h('button', { class: 'pat' + (bg.pattern === p.id ? ' active' : ''), title: p.label });
         b.appendChild(h('span', {}, p.label));
         b.style.backgroundImage = patternPreview(p.id, bg.patternColor);
+        b.style.backgroundSize = PREVIEW_SIZE[p.id] || '';
         b.style.backgroundColor = bg.color;
+        b.dataset.pattern = p.id;
         b.addEventListener('click', () => {
-          app.store.setBackground({ pattern: p.id });
+          const before = { ...app.store.doc.background };
+          const ops = [{ t: 'doc', before: { background: before }, after: { background: { ...before, pattern: p.id } } }];
+          // Notebook paper dates each sheet. Sheets that were made before
+          // pages had dates get today's - the day this pad became notebook
+          // paper - in the same step, so one undo takes both back.
+          if (p.id === 'notebook' && app.store.pages.some((q) => !q.date)) {
+            const today = todayStamp();
+            ops.push(app.store.pagesOp(app.store.pages.map((q) => (q.date ? { ...q } : { ...q, date: today }))));
+          }
+          app.store.commit('background', ops);
           app.rememberCanvas({ pattern: p.id });
           rerender(); refresh();
         });
@@ -151,8 +163,27 @@ export function createPanels(app) {
       const mm = (v) => (Math.round(v / (96 / 25.4) * 2) / 2).toLocaleString();
       const spacingNote = h('p', { style: 'margin:6px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
         t('About {mm} mm apart when printed. New boards use this spacing too.', { mm: mm(spacingNow) }));
+      // notebook paper on a pad carries the date each sheet was started; this hides or shows it
+      let dateRow = null;
+      if (bg.pattern === 'notebook' && app.store.pageCount) {
+        const dateBox = h('input', { type: 'checkbox', 'data-page-date': '1' });
+        dateBox.checked = bg.pageDate !== false;
+        const setDate = (v) => {
+          app.store.setBackground({ pageDate: v });
+          app.settings.pageDate = v;
+          app.saveSettings();
+          rerender(); refresh();
+        };
+        dateBox.addEventListener('change', () => setDate(dateBox.checked));
+        const dateWords = h('span', { style: 'cursor:pointer' }, t('Show the date'));
+        dateWords.addEventListener('click', () => { dateBox.checked = !dateBox.checked; setDate(dateBox.checked); });
+        dateRow = h('div', { style: 'margin-top:12px' },
+          h('div', { style: 'display:flex;align-items:center;gap:10px' }, h('label', { class: 'toggle' }, dateBox), dateWords),
+          h('p', { style: 'margin:6px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
+            t('Each page shows the day it was started, from this computer\'s calendar. It stays the same when you open the board later.')));
+      }
       const spacingSection = (bg.pattern && bg.pattern !== 'none')
-        ? h('div', { class: 'section' }, h('h5', {}, t('Spacing')), spacingRow, spacingNote) : null;
+        ? h('div', { class: 'section' }, h('h5', {}, t('Spacing')), spacingRow, spacingNote, dateRow) : null;
 
       const custom = h('input', { type: 'color', value: bg.color });
       custom.addEventListener('input', () => app.store.setBackground({ color: custom.value }));
@@ -226,7 +257,7 @@ export function createPanels(app) {
       if (page && off.length) {
         const b = h('button', { class: 'btn primary', style: 'width:100%' },
           off.length === 1 ? t('Fit 1 item onto the page') : t('Fit {n} items onto the page', { n: off.length }));
-        b.addEventListener('click', () => { app.fitContentToPage(); rerender(); refresh(); });
+        b.addEventListener('click', () => { app.bringOntoPages(off); rerender(); refresh(); });
         fitRow.appendChild(b);
         fitRow.appendChild(h('p', { style: 'margin:2px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
           t('Exports cover the sheet, so anything outside it is left out.')));
@@ -279,6 +310,9 @@ export function createPanels(app) {
     });
   }
 
+  // the little tiles show a few repeats of the pattern rather than one line across the top
+  const PREVIEW_SIZE = { grid: '11px 11px', lines: '100% 11px', columns: '11px 100%', graph: '11px 11px', dots: '10px 10px', notebook: '100% 100%, 100% 9px' };
+
   function patternPreview(id, color = '#c8c6c4') {
     const c = encodeURIComponent(color);
     switch (id) {
@@ -287,6 +321,7 @@ export function createPanels(app) {
       case 'columns': return `linear-gradient(90deg, ${color} 1px, transparent 1px)`;
       case 'graph': return `linear-gradient(${color} 1px, transparent 1px), linear-gradient(90deg, ${color} 1px, transparent 1px)`;
       case 'dots': return `radial-gradient(${color} 1.2px, transparent 1.2px)`;
+      case 'notebook': return 'linear-gradient(90deg, transparent 13px, #e0707f 13px, #e0707f 14px, transparent 14px), linear-gradient(#8db6e2 1px, transparent 1px)';
       default: return 'none';
     }
   }

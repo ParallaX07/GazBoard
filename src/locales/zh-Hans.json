@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "已将 {n} 项内容移回纸面",
  "One thing is off the page": "有 1 项内容在页面之外",
  "{n} things are off the page": "有 {n} 项内容在页面之外",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "导出范围是纸面，纸面之外的内容不会导出。你可以先缩放白板内容以适应页面，也可以直接导出纸面。",
- "Fit everything on": "全部缩放到页面内",
  "Export the sheet anyway": "仍然导出纸面",
  "Nothing on the board to export": "白板上没有可导出的内容",
  "Cancel": "取消",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "动画幻灯片按最后一次点击后的样子导入",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "开启（默认）：每张幻灯片按所有点击完成后的样子导入 —— 淡出的内容消失，移动的内容停在终点，放大的内容为完整大小。关闭：第一次点击之前的幻灯片，所有内容同时出现。",
  "Spacing": "间距",
- "About {mm} mm apart when printed. New boards use this spacing too.": "打印时间距约 {mm} 毫米。新建白板也会使用此间距。"
+ "About {mm} mm apart when printed. New boards use this spacing too.": "打印时间距约 {mm} 毫米。新建白板也会使用此间距。",
+ "Notebook": "笔记本",
+ "Show the date": "显示日期",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "每页显示其创建当天的日期（取自这台电脑的日历）。以后再打开白板，日期也不会改变。",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "导出只包含纸张范围，纸张外的内容不会被导出。你可以先把这些内容移到页面上（页面上已有的内容不会移动），或直接按原样导出。",
+ "Move them onto the page": "把它们移到页面上"
 }

@@ -1,6 +1,6 @@
 // Inserting images and documents (Word / PowerPoint / PDF) onto the board.
 
-import { pageRects, pageIndexForBox, offsetIntoRect, nearestPageIndex } from './core/pages.js';
+import { pageRects, pageIndexForBox, offsetIntoRect, nearestPageIndex, todayStamp } from './core/pages.js';
 import { uid } from './core/util.js';
 import { boundsOf } from './core/store.js';
 import { openPdf } from './importers/pdf.js';
@@ -325,7 +325,8 @@ function layoutPages(app, rendered, { name, layout, multiPage }) {
     const start = occupied.has(here) ? pad.length : here;
 
     const pages = pad.map((q) => ({ ...q }));
-    while (pages.length < start + rendered.length) pages.push({ ...pad[pad.length - 1] });
+    const last = pad[pad.length - 1];
+    while (pages.length < start + rendered.length) pages.push({ w: last.w, h: last.h, date: todayStamp() });
     const rects = pageRects(pages);
 
     const objs = rendered.map((p, i) => {

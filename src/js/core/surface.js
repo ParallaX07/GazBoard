@@ -1,10 +1,11 @@
 // The canvas view: sizing, the draw loop, culling, overlays.
 
 import { Camera } from './camera.js';
-import { drawBackground, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint } from './render.js';
+import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect } from './util.js';
+import { currentLanguage } from '../i18n.js';
 
 export class Surface {
   /**
@@ -92,7 +93,7 @@ export class Surface {
    * stale. Throwing the copy away first means the next frame really is drawn
    * again.
    */
-  repaintAll() { this._ink = null; this.invalidate(); }
+  repaintAll() { this._ink = null; this._paper = null; this.invalidate(); }
 
   /*
    * Repaint only this world-space box on the next frame.
@@ -281,6 +282,57 @@ export class Surface {
   /** CSS-pixel coordinates map 1:1 to the canvas after this. */
   screenTransform(ctx = this.ctx) { ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); }
 
+  /**
+   * The paper - desk, sheets, ruling, the date - painted ONCE per view and
+   * then copied, never re-drawn piecemeal.
+   *
+   * Erasing repaints only the strip under the eraser. Re-drawing the ruling
+   * inside that strip gave pixels that were very nearly, but not exactly, the
+   * ones the full paint had made: a graphics card smooths a line a hair
+   * differently when it is cut by a clip, and at 125% or 150% display scaling
+   * that showed as faint boxes along the eraser's path on dark boards and
+   * notebook paper. A straight copy of pixels from one picture of the paper
+   * cannot differ from itself, whatever the card does - so the strip and the
+   * whole board now both take their paper from the same picture. It is
+   * redrawn only when something about the paper changes: the view, the size,
+   * the board's colour or pattern, its pages, the theme or the language.
+   */
+  _paintPaper(ctx, w, h, pages) {
+    const bg = this.store.doc.background;
+    const d = this.dpr || 1;
+    const bw = ctx.canvas.width, bh = ctx.canvas.height;
+    // a canvas of another size (an export, a test probe) just paints directly
+    if (bw !== Math.round(w * d) || bh !== Math.round(h * d) || typeof document === 'undefined') {
+      drawBackground(ctx, bg, this.cam, Math.max(w, bw / d), Math.max(h, bh / d), pages);
+      return;
+    }
+    const cam = this.cam;
+    const key = [bw, bh, d, cam.x, cam.y, cam.z, isDarkBoard(), currentLanguage(),
+      JSON.stringify(bg), JSON.stringify(pages)].join('|');
+    let p = this._paper;
+    if (!p || p.key !== key) {
+      const c = (p && p.canvas) || document.createElement('canvas');
+      if (c.width !== bw || c.height !== bh) { c.width = bw; c.height = bh; }
+      const g = c.getContext('2d', { alpha: false });
+      g.setTransform(d, 0, 0, d, 0, 0);
+      /*
+       * Paint the whole buffer, not just w x h CSS pixels. At 125% a window
+       * 1426.4 CSS pixels wide has a buffer 1783 device pixels wide, but
+       * 1426 x 1.25 only reaches 1782.5 - the last column was half painted,
+       * half left black, and came out grey. Repainting every frame used to
+       * hide that (the half-coverage piled up towards the right colour); a
+       * picture painted once does not get that second chance.
+       */
+      drawBackground(g, bg, cam, bw / d, bh / d, pages);
+      p = this._paper = { key, canvas: c };
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(p.canvas, 0, 0);
+    ctx.restore();
+  }
+
   /** Background and every object, in world space. No selection chrome. */
   drawScene(ctx, w = this.width, h = this.height, onload = () => this.invalidate(), clip = null) {
     const cam = this.cam;
@@ -300,13 +352,24 @@ export class Surface {
     if (clip) {
       const a = cam.toScreen(clip.x, clip.y);
       const b = cam.toScreen(clip.x + clip.w, clip.y + clip.h);
+      /*
+       * The band's edges must fall on whole DEVICE pixels, not whole CSS
+       * pixels. At 125% or 150% display scaling a CSS-pixel edge lands part of
+       * the way through a device pixel, so the clip only half-covers that row
+       * of pixels - and the desk colour, the sheet and the ruling are each
+       * blended into it a second time over what was already there. On a white
+       * page that is invisible; on a dark board or notebook paper it left a
+       * faint box outline behind every move of the eraser.
+       */
+      const d = this.dpr || 1;
+      const x0 = Math.floor(a.x * d - 1) / d, y0 = Math.floor(a.y * d - 1) / d;
+      const x1 = Math.ceil(b.x * d + 1) / d, y1 = Math.ceil(b.y * d + 1) / d;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(Math.floor(a.x), Math.floor(a.y),
-        Math.ceil(b.x - a.x) + 1, Math.ceil(b.y - a.y) + 1);
+      ctx.rect(x0, y0, x1 - x0, y1 - y0);
       ctx.clip();
     }
-    drawBackground(ctx, this.store.doc.background, cam, w, h, pages);
+    this._paintPaper(ctx, w, h, pages);
 
     ctx.setTransform(this.dpr * cam.z, 0, 0, this.dpr * cam.z, this.dpr * cam.x, this.dpr * cam.y);
 
@@ -871,14 +934,14 @@ export class Surface {
    * dark mapping is switched off around this and put back afterwards rather
    * than assumed to be off, because an export can happen at any moment.
    */
-  renderTo(box, scale = 2, background = true) {
+  renderTo(box, scale = 2, background = true, ruling = background) {
     const wasDark = isDarkBoard();
     setDarkBoard(false);
-    try { return this._renderTo(box, scale, background); }
+    try { return this._renderTo(box, scale, background, ruling); }
     finally { setDarkBoard(wasDark); }
   }
 
-  _renderTo(box, scale = 2, background = true) {
+  _renderTo(box, scale = 2, background = true, ruling = background) {
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(box.w * scale));
     c.height = Math.max(1, Math.round(box.h * scale));
@@ -886,6 +949,9 @@ export class Surface {
     if (background) {
       ctx.fillStyle = this.store.doc.background.color || '#ffffff';
       ctx.fillRect(0, 0, c.width, c.height);
+      // the ruling is part of the paper, so it prints - a grid you wrote on
+      // should still be there on the printout
+      if (ruling) drawRuling(ctx, this.store.doc.background, { x: -box.x * scale, y: -box.y * scale, z: scale }, c.width, c.height, this.store.doc.pages);
     }
     ctx.setTransform(scale, 0, 0, scale, -box.x * scale, -box.y * scale);
     const pages = this.store.doc.pages;

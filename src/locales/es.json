@@ -99,8 +99,6 @@
  "Brought {n} things back onto the paper": "Se volvieron a poner {n} elementos en el papel",
  "One thing is off the page": "Hay un elemento fuera de la página",
  "{n} things are off the page": "Hay {n} elementos fuera de la página",
- "Exports cover the sheet, so anything outside it will be left out. You can shrink the board to fit first, or export the sheet as it is.": "La exportación abarca la hoja, así que lo que quede fuera no se incluirá. Puedes reducir la pizarra para que quepa o exportar la hoja tal como está.",
- "Fit everything on": "Ajustar todo",
  "Export the sheet anyway": "Exportar la hoja de todos modos",
  "Nothing on the board to export": "No hay nada en la pizarra para exportar",
  "Cancel": "Cancelar",
@@ -999,5 +997,10 @@
  "Animated slides come in after the last click": "Las diapositivas animadas llegan como quedan tras el último clic",
  "On (default): each slide comes in the way it looks once every click is done — what fades out is gone, what moves is where it stops, what grows is full size. Off: the slide as it is before the first click, with everything on it at once.": "Activado (predeterminado): cada diapositiva llega como queda cuando se han hecho todos los clics: lo que se desvanece desaparece, lo que se mueve está donde se detiene y lo que crece está a tamaño completo. Desactivado: la diapositiva como está antes del primer clic, con todo a la vez.",
  "Spacing": "Espaciado",
- "About {mm} mm apart when printed. New boards use this spacing too.": "Unos {mm} mm de separación al imprimir. Las pizarras nuevas también usan este espaciado."
+ "About {mm} mm apart when printed. New boards use this spacing too.": "Unos {mm} mm de separación al imprimir. Las pizarras nuevas también usan este espaciado.",
+ "Notebook": "Cuaderno",
+ "Show the date": "Mostrar la fecha",
+ "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "Cada página muestra el día en que se empezó, según el calendario de este ordenador. No cambia cuando vuelves a abrir la pizarra.",
+ "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "La exportación cubre la hoja, así que lo que quede fuera no saldrá. Puedes mover esos elementos a la página primero - lo que ya está en la página no se mueve - o exportar la hoja tal cual.",
+ "Move them onto the page": "Moverlos a la página"
 }

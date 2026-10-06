@@ -43,7 +43,8 @@ export async function exportPng(app, { scale = 2, transparent = false, selection
 
   const maxPx = 12000;
   const s = Math.min(scale, maxPx / Math.max(box.w, box.h));
-  const canvas = app.surface.renderTo(box, s, !transparent);
+  // the ruling prints with the page; a selection is a cut-out and comes without it
+  const canvas = app.surface.renderTo(box, s, !transparent, !transparent && !(selectionOnly && app.surface.selection.size));
   const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
   const buf = await blob.arrayBuffer();
 
