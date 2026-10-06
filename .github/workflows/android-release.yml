@@ -193,25 +193,24 @@ jobs:
         run: |
           set -euo pipefail
           NOTES="$(mktemp)"
+          # Every paragraph is ONE line. GitHub keeps the line breaks inside a
+          # paragraph, so text wrapped at 70 columns here came out as a narrow
+          # squashed column on the release page.
+          WHATS_NEW="release-notes/$VERSION.md"
           {
-            echo "GazBoard for Android, built from the $VERSION board code."
+            if [ -f "$WHATS_NEW" ]; then
+              cat "$WHATS_NEW"
+              echo
+            else
+              echo "::warning::No $WHATS_NEW - the Android release goes out with install notes only" >&2
+            fi
+            echo "## Install"
             echo
-            echo "**Install:** download the .apk and open it on your phone. Android will"
-            echo "ask you to allow installing from this source - that is normal for an app"
-            echo "that does not come from the Play Store."
+            echo "GazBoard for Android $VERSION (build $BUILD). Download the .apk and open it on your phone. Android will ask you to allow installing from this source - that is normal for an app that does not come from the Play Store. If you have a test build installed, uninstall it first: it was signed with a different key and Android will refuse to replace it."
             echo
-            echo "If you already have a test build installed, uninstall it first. It was"
-            echo "signed with a different key and Android will refuse to replace it."
+            echo "**Opening board files:** .gazboard and .openboard are GazBoard's own formats, so open them from inside GazBoard with Open board. GazBoard does not register as a general file viewer, so it will not appear in Open with for PDFs, images or other files."
             echo
-            echo "**Opening board files:** .gazboard and .openboard are GazBoard-specific"
-            echo "formats, not Android-wide registered document types. Open downloaded or"
-            echo "received board files from inside GazBoard using Open board. GazBoard does"
-            echo "not register as a general Android file viewer, so it will not appear in"
-            echo "Open with for PDFs, images, installers or other unrelated files."
-            echo
-            echo "The .aab is for Google Play and is not installable directly."
-            echo
-            echo "Runs on this device. No account, no sign-in, no cloud."
+            echo "The .aab is for Google Play and cannot be installed directly. Runs on this device: no account, no sign-in, no cloud."
           } > "$NOTES"
           # --latest=false leaves the "Latest" badge on the desktop release.
           # gh marks every new non-prerelease as the latest by default, so
