@@ -6,7 +6,7 @@
 
 </div>
 
-A free-form digital whiteboard for Windows, Linux, Android, and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **no Microsoft sign-in and no cloud. **** 
+A free-form digital whiteboard for Windows, Linux, Android, and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **No sign-in and no cloud.** 
 
 Everything runs locally. On top of the original feature set, it can **import Word, PowerPoint, and PDF files** onto the canvas as pages you draw over.
 
