@@ -4,6 +4,7 @@
 import { boundsOf, worldBounds } from './store.js';
 import { distToSegment, pointInBox, pointInPolygon, rotatePoint, boxesIntersect, boxContains } from './util.js';
 import { shapePath } from './render.js';
+import { hitConnector } from './connectors.js';
 
 const scratch = document.createElement('canvas').getContext('2d');
 
@@ -30,6 +31,11 @@ export function hitObject(o, p, tol = 6) {
   if (ghost(o)) return false;
   const lp = toLocal(o, p);
   const b = boundsOf(o);
+
+  if (o.type === 'connector') {
+    if (!pointInBox(p, { x: b.x - tol, y: b.y - tol, w: b.w + tol * 2, h: b.h + tol * 2 })) return false;
+    return hitConnector(o, p, tol);
+  }
 
   if (o.type === 'stroke') {
     if (!pointInBox(lp, { x: b.x - tol, y: b.y - tol, w: b.w + tol * 2, h: b.h + tol * 2 })) return false;

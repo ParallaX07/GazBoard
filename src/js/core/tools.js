@@ -12,6 +12,7 @@ import { pageRects, pageIndexAt, pageIndexForBox, nearestPageIndex, offsetIntoRe
 import { Surface } from './surface.js';
 import { t, currentLanguage } from '../i18n.js';
 import { SHAPE_LABELS } from '../ui/palettes.js';
+import { route as connectorRoute, midPoint, bendThrough, targetAt, sameTarget, dotsFor, drawConnector, endBox } from './connectors.js';
 
 const TAP_SLOP = 4;
 /*
@@ -85,6 +86,7 @@ export class Interaction {
     c.addEventListener('pointerleave', () => {
       if (this.action) return;
       this.surface.hoverId = null;
+      this._dotHost = null;
       // a nib parked at the edge of the board, with the real pointer somewhere
       // else entirely, is worse than no nib at all
       this.hideInkPointer();
@@ -486,7 +488,16 @@ export class Interaction {
         else this.action = { type: 'textDraw', start: wp, cur: wp, dismissedMenu };
         break;
       }
-      case 'select': default: this.startSelect(e, sp, wp); break;
+      case 'select': default: {
+        // pulling a new arrow out of one of an object's dots
+        const dot = !this.spaceDown && e.button === 0 ? this.arrowDotAt(sp) : null;
+        if (dot) {
+          this.action = { type: 'connectDraw', from: { ...dot.spec, x: dot.at.x, y: dot.at.y }, cur: wp, target: null, downSp: sp };
+          break;
+        }
+        this.startSelect(e, sp, wp);
+        break;
+      }
     }
     /*
      * The laser, and a mouse or finger that is moving the board while a pen
@@ -774,6 +785,17 @@ export class Interaction {
         }
         if (mods.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
         for (const o of a.objs) {
+          if (o.type === 'connector') {
+            // An arrow's box also depends on what it holds, which may be moving
+            // too, so it cannot be moved by "where its box was plus the drag".
+            // Its own ends are: from where they started, by the drag.
+            a.ends ??= new Map();
+            if (!a.ends.has(o.id)) a.ends.set(o.id, { a: o.a && { ...o.a }, b: o.b && { ...o.b } });
+            const st = a.ends.get(o.id);
+            if (o.a && st.a) { o.a.x = st.a.x + dx; o.a.y = st.a.y + dy; }
+            if (o.b && st.b) { o.b.x = st.b.x + dx; o.b.y = st.b.y + dy; }
+            continue;
+          }
           const b = a.origin.get(o.id);
           translateObject(o, b.x + dx - boundsOf(o).x, b.y + dy - boundsOf(o).y);
         }
@@ -820,7 +842,38 @@ export class Interaction {
         a.angle = ang;
         break;
       }
-      case 'shapeDraw': a.cur = wp; a.shift = !!mods.shift; break;
+      case 'shapeDraw': {
+        a.cur = wp; a.shift = !!mods.shift;
+        // an arrow being drawn notices what each end lands on
+        if (['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind)) {
+          if (a.targetStart === undefined) a.targetStart = this.arrowTarget(a.start);
+          a.targetEnd = this.arrowTarget(wp, a.targetStart);
+        }
+        break;
+      }
+      case 'connectDraw': {
+        a.cur = wp;
+        a.target = this.arrowTarget(wp, a.from);
+        break;
+      }
+      case 'connEnd': {
+        const o = a.obj;
+        const other = a.which === 'a' ? o.b : o.a;
+        const target = this.arrowTarget(wp, other);
+        a.target = target;
+        o[a.which] = target ? { ...target, x: wp.x, y: wp.y } : { x: wp.x, y: wp.y };
+        this.surface.invalidate();
+        break;
+      }
+      case 'connBend': {
+        const o = a.obj;
+        const bend = bendThrough(o, wp);
+        // pulled back to the line, it straightens out again
+        if (Math.abs(bend) < 0.04) { o.route = 'straight'; o.bend = 0; }
+        else { o.route = 'curved'; o.bend = bend; }
+        this.surface.invalidate();
+        break;
+      }
       case 'textDraw': a.cur = wp; break;
       case 'rulerMove': {
         this.ruler.x = a.x0 + (wp.x - a.start.x);
@@ -909,6 +962,16 @@ export class Interaction {
       case 'rotate': this.store.commitSnapshot('rotate', a.snap); break;
       case 'shapeDraw': this.finishShape(a); break;
       case 'textDraw': this.finishTextBox(a); break;
+      case 'connEnd': this.store.commitSnapshot('arrow end', a.snap); break;
+      case 'connBend': this.store.commitSnapshot('bend arrow', a.snap); break;
+      case 'connectDraw': {
+        // a tap on a dot is not an arrow
+        if (Math.hypot(sp.x - a.downSp.x, sp.y - a.downSp.y) < 8) break;
+        const end = a.target ? { ...a.target, x: wp.x, y: wp.y } : { x: wp.x, y: wp.y };
+        const o = this.app.addConnector(a.from, end);
+        this.app.setSelection([o.id]);
+        break;
+      }
     }
     this.action = null;
     this.actionId = null;
@@ -933,12 +996,30 @@ export class Interaction {
   handleAt(sp) {
     const sel = this.surface.selection;
     if (!sel.size || this.surface.selectionIsLocked()) return null;
+    const arrow = this.selectedArrow();
+    if (arrow) {
+      // an arrow has its two ends and (unless it is elbowed) its middle, not a box
+      const grab = this._lastDownType === 'touch' ? 22 : HANDLE_GRAB;
+      for (const [k, p] of Object.entries(this.arrowHandles(arrow))) {
+        if (Math.hypot(p.x - sp.x, p.y - sp.y) <= grab) return k;
+      }
+      return null;
+    }
     const box = this.surface.selectionScreenBox();
     if (!box) return null;
     const hp = handlePositions(box);
-    for (const k of [...HANDLES, 'rot'])
-      if (Math.hypot(hp[k].x - sp.x, hp[k].y - sp.y) <= (this._lastDownType === 'touch' ? 22 : HANDLE_GRAB)) return k;
-    return null;
+    const grab = this._lastDownType === 'touch' ? 22 : HANDLE_GRAB;
+    let best = null, bestD = Infinity;
+    for (const k of [...HANDLES, 'rot']) {
+      const d = Math.hypot(hp[k].x - sp.x, hp[k].y - sp.y);
+      if (d <= grab && d < bestD) { best = k; bestD = d; }
+    }
+    // an arrow dot that is nearer than the handle is the thing being reached for
+    if (best) {
+      const dot = this.arrowDotAt(sp);
+      if (dot && dot.dist < bestD) return null;
+    }
+    return best;
   }
 
   /**
@@ -995,9 +1076,120 @@ export class Interaction {
     o.wrapW = o.w;
   }
 
+  /** The one arrow selected on its own, if that is what is selected. */
+  selectedArrow() {
+    const sel = this.surface.selection;
+    if (sel.size !== 1) return null;
+    const o = this.store.get([...sel][0]);
+    return o && o.type === 'connector' && !o.locked ? o : null;
+  }
+
+  /** Screen positions of a selected arrow's handles: its ends, and its middle unless it is elbowed. */
+  arrowHandles(o) {
+    const r = connectorRoute(o);
+    const cam = this.surface.cam;
+    const out = { connA: cam.toScreen(r.a.x, r.a.y), connB: cam.toScreen(r.b.x, r.b.y) };
+    if (r.kind !== 'elbow') { const m = midPoint(o); out.connMid = cam.toScreen(m.x, m.y); }
+    return out;
+  }
+
+  /**
+   * The dots a new arrow can be pulled out of.
+   *
+   * Round the thing under the pointer (with Select), or round the one thing
+   * selected - which is how a finger, with nothing to hover, gets them. They
+   * stay while the pointer travels from the object out to a dot (the dots sit
+   * outside the object, so the pointer has to leave it to reach one). On a
+   * selected object the top dot sits above the rotate handle, not on it.
+   */
+  arrowDots() {
+    if (this.tool !== 'select' || this.action) return null;
+    const sel = this.surface.selection;
+    const usable = (x) => x && x.type !== 'connector' && x.type !== 'curtain' && !x.hidden && !x.locked;
+    let o = this.surface.hoverId ? this.store.get(this.surface.hoverId) : null;
+    if (!usable(o)) o = this._dotHost ? this.store.get(this._dotHost) : null;
+    if (!usable(o)) o = null;
+    let selected = false;
+    if (!o && sel.size >= 1) {
+      const objs = [...sel].map((id) => this.store.get(id)).filter(Boolean);
+      const gid = objs[0]?.groupId;
+      if (objs.length === 1 || (gid && objs.every((x) => x.groupId === gid))) { o = objs[0]; selected = true; }
+    } else if (o && sel.has(o.id)) selected = true;
+    // a locked page is something to point AT, not something to pull arrows out of every time it is hovered
+    if (!o || o.type === 'connector' || o.type === 'curtain' || o.hidden || o.locked) return null;
+    const spec = o.groupId && o.groupId !== this.app.openGroup ? { group: o.groupId } : { id: o.id };
+    const box = endBox(spec);
+    if (!box) return null;
+    const z = this.surface.cam.z;
+    // clear of the selection handles, which sit right on the box
+    const dots = dotsFor(box, 22 / z);
+    if (selected) {
+      // the rotate handle is 28px above the selection box, which is 6px outside the object
+      const sb = this.surface.selectionScreenBox();
+      if (sb) dots.n = this.surface.cam.toWorld(sb.x + sb.w / 2, sb.y - 28 - 24);
+    }
+    return { spec, box, dots };
+  }
+
+  /** Does the selection, as it stands, get arrow dots (one object, or one group, that can hold an arrow)? */
+  selectionHasDots() {
+    const objs = [...this.surface.selection].map((id) => this.store.get(id)).filter(Boolean);
+    const gid = objs[0]?.groupId;
+    if (!(objs.length === 1 || (gid && objs.every((x) => x.groupId === gid)))) return false;
+    const o = objs[0];
+    return o.type !== 'connector' && o.type !== 'curtain' && !o.hidden && !o.locked;
+  }
+
+  /** The arrow dot under a screen point, if any. */
+  arrowDotAt(sp) {
+    const d = this.arrowDots();
+    if (!d) return null;
+    const cam = this.surface.cam;
+    const grab = this._lastDownType === 'touch' ? 20 : 11;
+    for (const [side, p] of Object.entries(d.dots)) {
+      const q = cam.toScreen(p.x, p.y);
+      const dist = Math.hypot(q.x - sp.x, q.y - sp.y);
+      if (dist <= grab) return { ...d, side, at: p, dist };
+    }
+    return null;
+  }
+
+  /**
+   * Which object's dots to keep showing. The one under the pointer, or - when
+   * the pointer has just stepped off it towards a dot - the one it left, for
+   * as long as the pointer stays within reach of that object's dots.
+   */
+  keepDotHost(hit, wp) {
+    const was = this._dotHost;
+    if (hit && hit.type !== 'connector' && hit.type !== 'curtain') this._dotHost = hit.id;
+    else if (this._dotHost) {
+      const o = this.store.get(this._dotHost);
+      const box = o ? endBox(o.groupId && o.groupId !== this.app.openGroup ? { group: o.groupId } : { id: o.id }) : null;
+      const m = 40 / this.surface.cam.z;
+      const near = box && wp.x > box.x - m && wp.x < box.x + box.w + m && wp.y > box.y - m && wp.y < box.y + box.h + m;
+      if (!near) this._dotHost = null;
+    }
+    if (this._dotHost !== was) this.surface.invalidate();
+  }
+
+  /** What an arrow end at world point `wp` would hold on to, never the same thing as `other`. */
+  arrowTarget(wp, other = null, except = null) {
+    const t = targetAt(this.store, wp, 8 / this.surface.cam.z, { except, openGroup: this.app.openGroup });
+    return t && !sameTarget(t, other) ? t : null;
+  }
+
   startHandleGesture(sp, wp, pressed = null) {
     const k = pressed || this.handleAt(sp);
     if (!k) return false;
+    if (k === 'connA' || k === 'connB' || k === 'connMid') {
+      const o = this.selectedArrow();
+      if (!o) return false;
+      const snap = this.store.snapshot([o.id]);
+      this.action = k === 'connMid'
+        ? { type: 'connBend', obj: o, snap }
+        : { type: 'connEnd', obj: o, snap, which: k === 'connA' ? 'a' : 'b', target: null };
+      return true;
+    }
     const sel = this.surface.selection;
     const ids = withAttached(this.store, [...sel]);
     const objs = ids.map((id) => this.store.get(id)).filter(Boolean);
@@ -1757,6 +1949,23 @@ export class Interaction {
     const s = this.app.settings;
     const kind = s.shapeKind;
     const isLinear = kind === 'line' || kind === 'arrow' || kind === 'doubleArrow';
+    /*
+     * An arrow drawn from or onto something holds on to it. One that touches
+     * nothing at either end is the plain arrow shape it always was.
+     */
+    if (isLinear) {
+      const ts = a.targetStart ?? this.arrowTarget(a.start);
+      const te = a.targetEnd ?? this.arrowTarget(a.cur, ts);
+      if ((ts || te) && Math.hypot(a.cur.x - a.start.x, a.cur.y - a.start.y) * this.surface.cam.z >= 6) {
+        const heads = kind === 'line' ? 'none' : kind === 'doubleArrow' ? 'both' : 'end';
+        const o = this.app.addConnector(
+          ts ? { ...ts, x: a.start.x, y: a.start.y } : { x: a.start.x, y: a.start.y },
+          te ? { ...te, x: a.cur.x, y: a.cur.y } : { x: a.cur.x, y: a.cur.y },
+          { heads });
+        this.app.setSelection([o.id]);
+        return;
+      }
+    }
     let geo;
     if (isLinear) {
       let end = a.cur;
@@ -2111,9 +2320,17 @@ export class Interaction {
     }
 
     const hoverWas = this.surface.hoverId;
-    if (t === 'select' || t === 'lasso') {
+    const onDot = t === 'select' ? this.arrowDotAt(sp) : null;
+    if ((onDot?.side || null) !== (this._hotDot || null)) this.surface.invalidate();
+    if (onDot) {
+      // stepping off the object onto one of its dots keeps the dots there
+      cursor = 'crosshair';
+      this._hotDot = onDot.side;
+    } else if (t === 'select' || t === 'lasso') {
+      this._hotDot = null;
       const hit = pick(this.store, wp, 8 / this.surface.cam.z);
       this.surface.hoverId = hit ? hit.id : null;
+      if (t === 'select') this.keepDotHost(hit, wp);
       if (t === 'select') cursor = hit ? (hit.locked ? 'not-allowed' : 'move') : 'default';
     } else this.surface.hoverId = null;
     // Moving onto or off a grouped object changes what the chrome should show,
@@ -2589,7 +2806,62 @@ export class Interaction {
       }
     }
 
-    if (a && a.type === 'shapeDraw') {
+    // ---- arrows ----
+    const outline = (spec) => {
+      const b = spec && endBox(spec);
+      if (!b) return;
+      const p = cam.toScreen(b.x, b.y);
+      ctx.save();
+      ctx.strokeStyle = '#0078d4';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.strokeRect(p.x - 4, p.y - 4, b.w * cam.z + 8, b.h * cam.z + 8);
+      ctx.restore();
+    };
+    const ghostArrow = (from, to, heads = 'end') => {
+      const tmp = { type: 'connector', route: this.app.settings.arrowRoute || 'straight', a: { ...from }, b: { ...to }, heads, stroke: '#0078d4', lineWidth: 2.5 };
+      ctx.save();
+      ctx.translate(cam.x, cam.y);
+      ctx.scale(cam.z, cam.z);
+      ctx.globalAlpha = 0.9;
+      drawConnector(ctx, tmp);
+      ctx.restore();
+    };
+    if (a && a.type === 'connectDraw') {
+      outline(a.from);
+      outline(a.target);
+      ghostArrow(a.from, a.target ? { ...a.target, x: a.cur.x, y: a.cur.y } : { x: a.cur.x, y: a.cur.y });
+    }
+    if (a && a.type === 'connEnd') outline(a.target);
+    // the dots a new arrow can be pulled out of
+    if (!a) {
+      const d = this.arrowDots();
+      if (d) {
+        ctx.save();
+        for (const [side, p] of Object.entries(d.dots)) {
+          const q = cam.toScreen(p.x, p.y);
+          const hot = side === this._hotDot;
+          ctx.beginPath();
+          ctx.arc(q.x, q.y, hot ? 6.5 : 5, 0, Math.PI * 2);
+          ctx.fillStyle = hot ? '#0078d4' : '#ffffff';
+          ctx.strokeStyle = '#0078d4';
+          ctx.lineWidth = 1.5;
+          ctx.fill(); ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    if (a && a.type === 'shapeDraw' && (a.targetStart || a.targetEnd)
+        && ['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind)) {
+      // drawn onto something, it will be an arrow that holds on - so show that one
+      const kind = this.app.settings.shapeKind;
+      outline(a.targetStart);
+      outline(a.targetEnd);
+      ghostArrow(a.targetStart ? { ...a.targetStart, x: a.start.x, y: a.start.y } : { x: a.start.x, y: a.start.y },
+        a.targetEnd ? { ...a.targetEnd, x: a.cur.x, y: a.cur.y } : { x: a.cur.x, y: a.cur.y },
+        kind === 'line' ? 'none' : kind === 'doubleArrow' ? 'both' : 'end');
+    } else if (a && a.type === 'shapeDraw') {
       const st = this.app.settings;
       const ghost = { type: 'shape', kind: st.shapeKind, stroke: st.shapeStroke, fill: st.shapeFill, lineWidth: st.shapeLineWidth, dash: st.shapeDash };
       const isLinear = ['line', 'arrow', 'doubleArrow'].includes(st.shapeKind);

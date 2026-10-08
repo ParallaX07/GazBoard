@@ -3,7 +3,22 @@
 import { boundsOf } from './store.js';
 import { bboxOfPoints, rotatePoint } from './util.js';
 
+/*
+ * An arrow is moved, scaled and turned through its two ends. An end that
+ * holds on to something is worked out from that thing whenever the arrow is
+ * drawn, so moving it here only matters if it is free - which is exactly
+ * right: drag an arrow on its own and its loose ends go with it while its
+ * attached ends stay put; move it together with what it connects and it
+ * follows them.
+ */
+function eachEnd(o, fn) { for (const k of ['a', 'b']) if (o[k]) fn(o[k]); }
+
 export function translateObject(o, dx, dy) {
+  if (o.type === 'connector') {
+    eachEnd(o, (e) => { e.x += dx; e.y += dy; });
+    o.x += dx; o.y += dy;
+    return;
+  }
   if (o.type === 'stroke') {
     for (const p of o.points) { p.x += dx; p.y += dy; }
     o.bbox = bboxOfPoints(o.points);
@@ -11,6 +26,10 @@ export function translateObject(o, dx, dy) {
 }
 
 export function scaleObject(o, sx, sy, ox, oy) {
+  if (o.type === 'connector') {
+    eachEnd(o, (e) => { e.x = ox + (e.x - ox) * sx; e.y = oy + (e.y - oy) * sy; });
+    return;
+  }
   if (o.type === 'stroke') {
     for (const p of o.points) { p.x = ox + (p.x - ox) * sx; p.y = oy + (p.y - oy) * sy; }
     o.bbox = bboxOfPoints(o.points);
@@ -29,6 +48,11 @@ export function scaleObject(o, sx, sy, ox, oy) {
 }
 
 export function rotateObjectAround(o, angle, cx, cy) {
+  if (o.type === 'connector') {
+    // an arrow turns by moving its ends; it never carries a rotation of its own
+    eachEnd(o, (e) => { const p = rotatePoint(e.x, e.y, cx, cy, angle); e.x = p.x; e.y = p.y; });
+    return;
+  }
   const b = boundsOf(o);
   const c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   const nc = rotatePoint(c.x, c.y, cx, cy, angle);

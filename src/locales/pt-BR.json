@@ -1002,5 +1002,8 @@
  "Show the date": "Mostrar a data",
  "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "Cada página mostra o dia em que foi iniciada, pelo calendário deste computador. A data não muda quando você abrir o quadro depois.",
  "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "A exportação cobre a folha, então o que estiver fora dela fica de fora. Você pode mover esses itens para a página antes - o que já está na página não se move - ou exportar a folha como está.",
- "Move them onto the page": "Movê-los para a página"
+ "Move them onto the page": "Movê-los para a página",
+ "Straight arrow": "Seta reta",
+ "Elbow arrow": "Seta em ângulo",
+ "Curved arrow": "Seta curva"
 }

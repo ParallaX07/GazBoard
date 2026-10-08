@@ -1002,5 +1002,8 @@
  "Show the date": "Mostrar la fecha",
  "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "Cada página muestra el día en que se empezó, según el calendario de este ordenador. No cambia cuando vuelves a abrir la pizarra.",
  "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "La exportación cubre la hoja, así que lo que quede fuera no saldrá. Puedes mover esos elementos a la página primero - lo que ya está en la página no se mueve - o exportar la hoja tal cual.",
- "Move them onto the page": "Moverlos a la página"
+ "Move them onto the page": "Moverlos a la página",
+ "Straight arrow": "Flecha recta",
+ "Elbow arrow": "Flecha en ángulo",
+ "Curved arrow": "Flecha curva"
 }

@@ -367,8 +367,18 @@ function structuredCloneSafe(v) {
 /* --------------------------------------------------------------- *
  * Object geometry - shared by hit-testing, rendering and export.
  * --------------------------------------------------------------- */
+/*
+ * An arrow's box depends on where the things it holds on to are, which only
+ * the arrow module can work out - and that module needs this one. It hands
+ * its answer in here when the app starts, rather than the two importing each
+ * other.
+ */
+let connectorBox = null;
+export function setConnectorBounds(fn) { connectorBox = fn; }
+
 export function boundsOf(o) {
   if (!o) return { x: 0, y: 0, w: 0, h: 0 };
+  if (o.type === 'connector') return connectorBox ? connectorBox(o) : { x: o.x || 0, y: o.y || 0, w: o.w || 0, h: o.h || 0 };
   if (o.type === 'stroke') {
     const b = o.bbox || { x: 0, y: 0, w: 0, h: 0 };
     const pad = (o.width || 4) / 2 + 1;

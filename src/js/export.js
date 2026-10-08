@@ -8,6 +8,7 @@ import { layoutPages } from './ui/pdfdialog.js';
 import { FONT, faceOf, CURTAIN_COLOR } from './core/render.js';
 import { t } from './i18n.js';
 import { mathEntry, mathPng, hasMaths, inlineFit } from './core/maths.js';
+import { connectorSvg } from './core/connectors.js';
 
 /**
  * What a bitmap or vector export covers.
@@ -92,6 +93,8 @@ export function buildSvg(app, box) {
       const d = o.points.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
       const hl = o.tool === 'highlighter';
       parts.push(`<path d="${d}" fill="none" stroke="${o.color}" stroke-width="${o.width}" stroke-linecap="round" stroke-linejoin="round"${hl ? ` opacity="${o.opacity ?? 0.38}"` : ''}${rot}/>`);
+    } else if (o.type === 'connector') {
+      parts.push(connectorSvg(o));
     } else if (o.type === 'shape') {
       parts.push(shapeSvg(o, rot));
       if (o.text) parts.push(textSvg(meas, o.text, o.x + 10, o.y + 10, o.w - 20, o.h - 20, { align: 'center', valign: 'middle', color: o.textColor || '#201f1e', size: o.fontSize || 20, runs: objectRuns(o), bold: o.bold, italic: o.italic, font: o.font }, rot));

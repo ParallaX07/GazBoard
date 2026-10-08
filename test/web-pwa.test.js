@@ -400,6 +400,23 @@ async function runTests() {
         }
       }
       check(`all ${assets.length} precached assets exist in src/`, missingCount === 0);
+
+      // the other way round: a new module left off the list breaks the offline web app
+      const listed = new Set(assets.map((a) => a.replace(/^\.\//, '')));
+      const modules = [];
+      const walk = (dir) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (e.name.endsWith('.js')) modules.push(path.relative(SRC, full).split(path.sep).join('/'));
+        }
+      };
+      walk(path.join(SRC, 'js'));
+      // android-convert.js belongs to the Android app's own converter page, never the web app
+      const NOT_WEB = new Set(['js/platform/android-convert.js']);
+      const unlisted = modules.filter((m) => !listed.has(m) && !NOT_WEB.has(m));
+      check(`every one of the ${modules.length} modules under src/js is precached`, unlisted.length === 0,
+        `not in PRECACHE_ASSETS (the offline app would fail to load them): ${unlisted.join(', ')}`);
     }
 
     // Direct lifecycle execution test in VM sandbox

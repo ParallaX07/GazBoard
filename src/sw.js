@@ -48,6 +48,7 @@ const PRECACHE_ASSETS = [
   './locales/zh-Hant.json',
   './js/templates.js',
   './js/core/camera.js',
+  './js/core/connectors.js',
   './js/core/cursors.js',
   './js/core/emoji.js',
   './js/core/erase.js',

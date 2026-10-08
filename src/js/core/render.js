@@ -6,6 +6,7 @@ import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
 import { objectRuns, layoutRich, fitRichSize, drawRichLines } from './richtext.js';
 import { mathEntry, hasMaths } from './maths.js';
+import { drawConnector } from './connectors.js';
 
 import { fontStack } from '../ui/palettes.js';
 import { t, currentLanguage, direction } from '../i18n.js';
@@ -1082,6 +1083,7 @@ export function drawObject(ctx, o, onload, editing = null) {
     case 'math': drawMath(ctx, o, onload); break;
     case 'table': drawTable(ctx, o, hideCell); break;
     case 'curtain': drawCurtain(ctx, o); break;
+    case 'connector': drawConnector(ctx, o, (c) => inkPaint(c)); break;
   }
   ctx.restore();
 }

@@ -1002,5 +1002,8 @@
  "Show the date": "显示日期",
  "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "每页显示其创建当天的日期（取自这台电脑的日历）。以后再打开白板，日期也不会改变。",
  "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "导出只包含纸张范围，纸张外的内容不会被导出。你可以先把这些内容移到页面上（页面上已有的内容不会移动），或直接按原样导出。",
- "Move them onto the page": "把它们移到页面上"
+ "Move them onto the page": "把它们移到页面上",
+ "Straight arrow": "直线箭头",
+ "Elbow arrow": "折线箭头",
+ "Curved arrow": "曲线箭头"
 }

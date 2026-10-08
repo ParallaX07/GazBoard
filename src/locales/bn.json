@@ -1002,5 +1002,8 @@
  "Show the date": "তারিখ দেখাও",
  "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "প্রতিটি পেজে এই কম্পিউটারের ক্যালেন্ডার অনুযায়ী সেটি শুরু করার দিনটি দেখায়। পরে বোর্ড খুললেও তারিখটি একই থাকে।",
  "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "এক্সপোর্টে শুধু পেজটুকুই আসে, তাই এর বাইরে যা আছে তা বাদ পড়বে। আগে সেগুলো পেজে সরিয়ে আনতে পারেন - পেজে যা আছে তা নড়বে না - অথবা পেজটি যেমন আছে তেমনই এক্সপোর্ট করতে পারেন।",
- "Move them onto the page": "সেগুলো পেজে সরিয়ে আনো"
+ "Move them onto the page": "সেগুলো পেজে সরিয়ে আনো",
+ "Straight arrow": "সোজা অ্যারো",
+ "Elbow arrow": "ভাঁজ করা অ্যারো",
+ "Curved arrow": "বাঁকা অ্যারো"
 }

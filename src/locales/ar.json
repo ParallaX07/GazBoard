@@ -1002,5 +1002,8 @@
  "Show the date": "إظهار التاريخ",
  "Each page shows the day it was started, from this computer's calendar. It stays the same when you open the board later.": "تعرض كل صفحة اليوم الذي بدأت فيه، حسب تقويم هذا الكمبيوتر. ويبقى التاريخ كما هو عند فتح اللوحة لاحقًا.",
  "Exports cover the sheet, so anything outside it will be left out. You can move those things onto the page first - nothing already on the page moves - or export the sheet as it is.": "يغطي التصدير الورقة فقط، لذا سيُستبعد كل ما يقع خارجها. يمكنك نقل تلك العناصر إلى الصفحة أولًا - دون تحريك أي شيء موجود عليها - أو تصدير الورقة كما هي.",
- "Move them onto the page": "انقلها إلى الصفحة"
+ "Move them onto the page": "انقلها إلى الصفحة",
+ "Straight arrow": "سهم مستقيم",
+ "Elbow arrow": "سهم بزاوية",
+ "Curved arrow": "سهم منحنٍ"
 }

@@ -39,6 +39,10 @@ const P = {
   folderMove: 'M3.5 6.5h6l2 2h9v10h-17zM9 13.5h6M12.5 11l2.5 2.5-2.5 2.5',
   paste: 'M9 4h6v3H9zM7 5.5H5.5V20h13V5.5H17M8.5 11h7M8.5 14.5h7M8.5 18h4',
   front: 'M4 8l8-4 8 4-8 4zM4 12l8 4 8-4M4 16l8 4 8-4',
+  // the three ways an arrow can run between two things
+  arrowStraight: 'M5 19L18 6M12 6h6v6',
+  arrowElbow: 'M4 19h8V7h7M15 3.5L19 7l-4 3.5',
+  arrowCurved: 'M4 19C5 9 11 6 18.5 6.5M14.5 3l4 3.5-3.6 3.8',
   lock: 'M6.5 10.5h11V20h-11zM9 10.5V8a3 3 0 0 1 6 0v2.5',
   unlock: 'M6.5 10.5h11V20h-11zM9 10.5V8a3 3 0 0 1 5.8-1',
   board: 'M3 5h18v11H3zM12 16v3M8.5 19h7',

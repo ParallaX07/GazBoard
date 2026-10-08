@@ -6956,6 +6956,527 @@ async function run(win, app) {
     lastCol.every((r) => r.last === r.inside),
     lastCol.map((r) => `@${r.dpr}x, ${r.css} CSS px = ${r.buffer} device px: last column ${r.last}, just inside ${r.inside}`).join('; '));
 
+  {
+  /* ================================================================== *
+   *  Arrows that hold on to things: straight, elbow and curved
+   * ================================================================== */
+  /*
+   * Everything here is checked twice over where it can be: once through the
+   * app's own functions, and once with the real mouse - dots pulled out of a
+   * hovered shape, the Arrow tool drawn from one thing onto another, an end
+   * handle dragged off one object and dropped on the next. Positions are read
+   * back from the board, so a failure says where things actually ended up.
+   */
+  const arrowHelpers = String.raw`
+    const a = window.app, sf = a.surface;
+    const C = await import('app://board/js/core/connectors.js');
+    const add = (o) => { a.store.add(o, 'x'); return o; };
+    const rect = (id, x, y, w = 160, h = 100, extra = {}) => add({ id, type: 'shape', kind: 'rect', x, y, w, h, rotation: 0, stroke: '#201f1e', fill: '#ffffff', lineWidth: 3, text: '', ...extra });
+    const r1 = (n) => Math.round(n * 10) / 10;
+    const pt = (p) => '(' + r1(p.x) + ',' + r1(p.y) + ')';
+    // where a world point is on the window, for real mouse events
+    const scr = (x, y) => { const q = sf.cam.toScreen(x, y), r = sf.canvas.getBoundingClientRect(); return { x: Math.round(q.x + r.left), y: Math.round(q.y + r.top) }; };
+  `;
+  const arrowSetup = arrowHelpers + String.raw`
+    if (a.panels.open) a.panels.close?.();
+    a.newBoard(true); a.store.clear();
+    await new Promise((res) => setTimeout(res, 80));
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0; sf.invalidate();
+  `;
+  const mouseDrag = async (from, to, steps = 12) => {
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: from.x, y: from.y });
+    await sleep(60);
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: from.x + 1, y: from.y });
+    await sleep(60);
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: from.x, y: from.y });
+    await sleep(60);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: from.x, y: from.y, button: 'left', clickCount: 1 });
+    for (let i = 1; i <= steps; i++) {
+      const x = Math.round(from.x + (to.x - from.x) * i / steps), y = Math.round(from.y + (to.y - from.y) * i / steps);
+      win.webContents.sendInputEvent({ type: 'mouseMove', x, y, button: 'left', modifiers: ['leftbuttondown'] });
+      await sleep(16);
+    }
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: to.x, y: to.y, button: 'left', clickCount: 1 });
+    await sleep(150);
+  };
+
+  // 1. the route: where the ends land, and how each kind of arrow runs
+  const arrowRoutes = await js(arrowSetup + String.raw`
+    const r = {};
+    const A = rect('rA', 100, 100), B = rect('rB', 500, 120);
+    const s = a.addConnector({ id: 'rA' }, { id: 'rB' }, { route: 'straight' });
+    let g = C.route(s);
+    // straight: leaves A's right side and arrives on B's left side, a few units off each edge
+    r.straightA = pt(g.a); r.straightB = pt(g.b);
+    r.straightOk = Math.abs(g.a.x - (100 + 160 + 6)) < 0.6 && Math.abs(g.b.x - (500 - 6)) < 0.6 && g.attachedA && g.attachedB;
+    // move B underneath A: the ends slide round to the bottom of A and the top of B
+    a.store.update('rB', { x: 120, y: 420 }, 'move');
+    g = C.route(s);
+    r.belowA = pt(g.a); r.belowB = pt(g.b);
+    r.slidOk = Math.abs(g.a.y - (100 + 100 + 6)) < 0.6 && Math.abs(g.b.y - (420 - 6)) < 0.6;
+    // undo the move: back where it was, the arrow with it
+    a.store.undo();
+    g = C.route(s);
+    r.undoOk = Math.abs(g.b.x - (500 - 6)) < 0.6;
+    // elbow: only level and upright stretches, starting and ending square to the edges
+    a.store.updateMany([s.id], { route: 'elbow' }, 'x');
+    a.store.update('rB', { x: 520, y: 380 }, 'move');
+    g = C.route(a.store.get(s.id));
+    r.elbowPts = g.pts.map(pt).join(' ');
+    r.elbowSquare = g.pts.every((p, i) => !i || Math.abs(p.x - g.pts[i - 1].x) < 0.01 || Math.abs(p.y - g.pts[i - 1].y) < 0.01);
+    r.elbowTurns = g.pts.length - 2;
+    // two boxes facing each other and roughly in line: no little step, one straight run
+    a.store.update('rB', { x: 520, y: 110 }, 'move');
+    g = C.route(a.store.get(s.id));
+    r.alignedPts = g.pts.map(pt).join(' ');
+    r.alignedStraight = g.pts.length === 2 && Math.abs(g.pts[0].y - g.pts[1].y) < 0.01;
+    // curved: bends to one side by default, and through the point dragged to
+    a.store.updateMany([s.id], { route: 'curved' }, 'x');
+    const o = a.store.get(s.id);
+    g = C.route(o);
+    const mid = C.midPoint(o);
+    const chordY = (g.a.y + g.b.y) / 2;
+    r.curveBulge = r1(Math.abs(mid.y - chordY));
+    r.curved = r.curveBulge > 10 && !!g.ctrl;
+    const want = { x: (g.a.x + g.b.x) / 2, y: chordY - 90 };
+    o.bend = C.bendThrough(o, want);
+    const mid2 = C.midPoint(o);
+    r.bendTo = pt(want); r.bendGot = pt(mid2);
+    r.bendOk = Math.hypot(mid2.x - want.x, mid2.y - want.y) < 6;
+    // the box an arrow reports always contains the whole arrow and its head
+    const bb = C.connectorBounds(o);
+    r.boxHolds = C.route(o).pts.every((p) => p.x >= bb.x && p.x <= bb.x + bb.w && p.y >= bb.y && p.y <= bb.y + bb.h);
+    // free ends: an arrow from A to a point in empty space
+    const f = a.addConnector({ id: 'rA' }, { x: 300, y: 500 }, { route: 'straight' });
+    g = C.route(f);
+    r.freeEnd = pt(g.b);
+    r.freeOk = g.attachedA && !g.attachedB && Math.abs(g.b.x - 300) < 0.01 && Math.abs(g.b.y - 500) < 0.01;
+    // every kind with free ends both sides still draws (no crash, a sensible box)
+    let bad = [];
+    for (const k of ['straight', 'elbow', 'curved']) {
+      const z = a.addConnector({ x: 50, y: 700 }, { x: 400, y: 640 }, { route: k });
+      const gz = C.route(z);
+      if (!gz.pts.length || !(gz.bbox.w > 300)) bad.push(k + ':' + JSON.stringify(gz.bbox));
+    }
+    r.freeBoth = bad.join(' ') || 'ok';
+    a.store.clear();
+    return r;
+  `);
+  check('arrows: a straight arrow leaves one box and arrives at the other, just off each edge',
+    arrowRoutes.straightOk, `ends at ${arrowRoutes.straightA} and ${arrowRoutes.straightB} (wanted x≈266 on A's right side and x≈494 on B's left side, both attached)`);
+  check('arrows: move the box below and the ends slide round to the facing sides; undo brings it back',
+    arrowRoutes.slidOk && arrowRoutes.undoOk, `after the move: ${arrowRoutes.belowA} → ${arrowRoutes.belowB} (wanted A's bottom y≈206, B's top y≈414); after undo back on B's left: ${arrowRoutes.undoOk}`);
+  check('arrows: an elbow arrow runs only level and upright, square to both edges',
+    arrowRoutes.elbowSquare && arrowRoutes.elbowTurns >= 1, `points ${arrowRoutes.elbowPts} (${arrowRoutes.elbowTurns} turn(s))`);
+  check('arrows: two boxes in line get one straight run, not a little step',
+    arrowRoutes.alignedStraight, `points ${arrowRoutes.alignedPts}`);
+  check('arrows: a curved arrow bows out, and bends through the point it is dragged to',
+    arrowRoutes.curved && arrowRoutes.bendOk, `default bulge ${arrowRoutes.curveBulge} units; dragged to ${arrowRoutes.bendTo}, the middle of the curve is at ${arrowRoutes.bendGot}`);
+  check('arrows: the box an arrow reports holds the whole arrow; free ends stay exactly where they were put',
+    arrowRoutes.boxHolds && arrowRoutes.freeOk && arrowRoutes.freeBoth === 'ok',
+    `box holds every point: ${arrowRoutes.boxHolds}; free end at ${arrowRoutes.freeEnd} (wanted (300,500)); arrows with two free ends: ${arrowRoutes.freeBoth}`);
+
+  // 2. what an arrow can hold on to
+  const arrowTargets = await js(arrowSetup + String.raw`
+    const r = {};
+    const t = await import('app://board/js/core/connectors.js');
+    rect('tShape', 100, 100);
+    add({ id: 'tNote', type: 'note', x: 400, y: 80, w: 180, h: 180, color: '#ffd94a', text: 'n', rotation: 0 });
+    add({ id: 'tText', type: 'text', x: 700, y: 100, w: 160, h: 40, rotation: 0, fontSize: 24, color: '#201f1e', text: 'words' });
+    add({ id: 'tMath', type: 'math', x: 100, y: 400, w: 160, h: 60, rotation: 0, latex: 'x^2', color: '#201f1e' });
+    add({ id: 'tImg', type: 'image', x: 400, y: 400, w: 160, h: 120, rotation: 0, src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' });
+    const pts = []; for (let i = 0; i <= 20; i++) pts.push({ x: 700 + i * 8, y: 420 + Math.sin(i / 2) * 20, p: 0.5 });
+    add({ id: 'tInk', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none', points: pts, bbox: { x: 700, y: 400, w: 160, h: 40 }, rotation: 0 });
+    rect('gA', 100, 700, 80, 60, { groupId: 'G1' }); rect('gB', 200, 700, 80, 60, { groupId: 'G1' });
+    rect('locked', 400, 650, 300, 200, { locked: true });
+    const at = (x, y) => JSON.stringify(t.targetAt(a.store, { x, y }, 8));
+    r.found = {
+      shape: at(180, 150), note: at(490, 170), text: at(780, 120), math: at(180, 430),
+      image: at(480, 460), ink: at(780, 420), group: at(140, 730), locked: at(550, 750), empty: at(1000, 1000)
+    };
+    r.allFound = r.found.shape.includes('tShape') && r.found.note.includes('tNote') && r.found.text.includes('tText') &&
+      r.found.math.includes('tMath') && r.found.image.includes('tImg') && r.found.ink.includes('tInk') &&
+      r.found.group.includes('"group":"G1"') && r.found.locked.includes('locked') && r.found.empty === 'null';
+    // an arrow to the group runs to the edge of the whole group, not one member
+    const c = a.addConnector({ id: 'tShape' }, { group: 'G1' }, { route: 'straight' });
+    const g = t.route(c);
+    r.groupEnd = '(' + Math.round(g.b.x) + ',' + Math.round(g.b.y) + ')';
+    r.groupOk = g.attachedB && g.b.y < 700 && g.b.y > 690;
+    // an arrow never holds on to another arrow
+    r.notArrow = JSON.stringify(t.targetAt(a.store, { x: g.a.x + (g.b.x - g.a.x) / 2, y: g.a.y + (g.b.y - g.a.y) / 2 }, 2));
+    a.store.clear();
+    return r;
+  `);
+  check('arrows: hold on to shapes, notes, text, maths, pictures, handwriting, groups and locked pages - and nothing in empty space',
+    arrowTargets.allFound, JSON.stringify(arrowTargets.found));
+  check('arrows: an arrow to a group runs to the edge of the whole group; arrows never grab other arrows',
+    arrowTargets.groupOk && !/"id":"c/.test(arrowTargets.notArrow), `group end at ${arrowTargets.groupEnd} (wanted just above y=700); what the arrow's own middle offers: ${arrowTargets.notArrow}`);
+
+  // 3. with the real mouse: dots on hover, drag one out onto a note
+  await js(arrowSetup + String.raw`
+    rect('mA', 200, 200, 180, 110);
+    add({ id: 'mNote', type: 'note', x: 650, y: 180, w: 180, h: 180, color: '#ffd94a', text: '', rotation: 0 });
+    a.setTool('select'); a.setSelection([]); sf.invalidate();
+  `);
+  await sleep(150);
+  const dotPlace = await js(arrowHelpers + String.raw`
+    const p = scr(250, 255); return p;
+  `);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: dotPlace.x, y: dotPlace.y });
+  await sleep(80);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: dotPlace.x + 2, y: dotPlace.y });
+  await sleep(150);
+  const dotsShown = await js(String.raw`
+    const it = window.app.interaction, d = it.arrowDots();
+    const sf = window.app.surface, q = d && sf.cam.toScreen(d.dots.e.x, d.dots.e.y), r = sf.canvas.getBoundingClientRect();
+    // the dot really is drawn: a blue ring at the east dot
+    const c = sf.ctx.getImageData(Math.round((q?.x || 0) * sf.dpr) + Math.round(5 * sf.dpr), Math.round((q?.y || 0) * sf.dpr), 1, 1).data;
+    return { hover: sf.hoverId, dots: d ? Object.keys(d.dots).join('') : '', east: d ? { x: Math.round(q.x + r.left), y: Math.round(q.y + r.top) } : null, ring: [c[0], c[1], c[2]].join(',') };
+  `);
+  check('arrows: hovering a shape with Select shows four dots round it, drawn on the board',
+    dotsShown.hover === 'mA' && dotsShown.dots === 'nesw' && /^(\d+),(\d+),(\d+)$/.test(dotsShown.ring) && Number(dotsShown.ring.split(',')[2]) > 150 && Number(dotsShown.ring.split(',')[0]) < 120,
+    `hovered: ${dotsShown.hover} (wanted mA), dots: "${dotsShown.dots}" (wanted nesw), pixel on the east dot's ring: ${dotsShown.ring} (wanted blue)`);
+  const notePlace = await js(arrowHelpers + String.raw`return scr(740, 270);`);
+  const undoBefore = await js(`return window.app.store.undoStack.length;`);
+  if (dotsShown.east) await mouseDrag(dotsShown.east, notePlace);
+  const dragged = await js(String.raw`
+    const a = window.app;
+    const c = a.store.objects.filter((o) => o.type === 'connector');
+    const o = c[0];
+    return { n: c.length, a: o && JSON.stringify({ id: o.a.id, group: o.a.group }), b: o && JSON.stringify({ id: o.b.id, group: o.b.group }), selected: o && a.surface.selection.has(o.id), undo: a.store.undoStack.length };
+  `);
+  check('arrows: dragging a dot onto a note makes one arrow from the shape to the note, selected',
+    dragged.n === 1 && dragged.a === '{"id":"mA"}' && dragged.b === '{"id":"mNote"}' && dragged.selected,
+    `arrows made: ${dragged.n}, start holds ${dragged.a} (wanted mA), end holds ${dragged.b} (wanted mNote), selected: ${dragged.selected}`);
+  await js(`window.app.command('edit.undo');`);
+  const afterUndo = await js(`return window.app.store.objects.filter((o) => o.type === 'connector').length;`);
+  check('arrows: one undo takes the new arrow away again',
+    afterUndo === 0 && dragged.undo === undoBefore + 1, `arrows left after undo: ${afterUndo}; undo steps the drag added: ${dragged.undo - undoBefore} (wanted 1)`);
+
+  // 3b. the dots stay put while the pointer walks out to one of them, and on a
+  // selected object the top dot is clear of the rotate handle
+  await js(arrowSetup + String.raw`
+    rect('wA', 200, 200, 180, 110);
+    add({ id: 'wNote', type: 'note', x: 650, y: 180, w: 180, h: 180, color: '#ffd94a', text: '', rotation: 0 });
+    a.setTool('select'); a.setSelection([]); sf.invalidate();
+  `);
+  await sleep(120);
+  const walk = await js(arrowHelpers + String.raw`
+    const out = []; for (let x = 360; x <= 402; x += 2) out.push(scr(x, 255)); return out;
+  `);
+  const lost = [];
+  for (const p of walk) {
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
+    await sleep(25);
+    const st = await js(String.raw`const d = window.app.interaction.arrowDots(); return d ? Object.keys(d.dots).join('') : 'none';`);
+    if (st !== 'nesw') lost.push(`${p.x}:${st}`);
+  }
+  const atEnd = await js(`return { hot: window.app.interaction._hotDot || null, hover: window.app.surface.hoverId };`);
+  check('arrows: walking the mouse from a shape out to its east dot keeps the dots showing the whole way',
+    lost.length === 0 && atEnd.hot === 'e',
+    `screen x where the dots were gone or wrong: ${lost.join(', ') || 'none'}; dot lit at the end: ${atEnd.hot} (wanted e), hovered: ${atEnd.hover}`);
+  const walkNote = await js(arrowHelpers + String.raw`return scr(740, 270);`);
+  await mouseDrag(walk[walk.length - 1], walkNote);
+  const walked = await js(String.raw`const c = window.app.store.objects.filter((o) => o.type === 'connector'); return { n: c.length, a: c[0]?.a.id, b: c[0]?.b.id };`);
+  check('arrows: and pressing that dot pulls out an arrow onto the note',
+    walked.n === 1 && walked.a === 'wA' && walked.b === 'wNote', `arrows: ${walked.n}, from ${walked.a} (wanted wA) to ${walked.b} (wanted wNote)`);
+  const moveAway = await js(arrowHelpers + String.raw`return scr(560, 600);`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: moveAway.x, y: moveAway.y });
+  await sleep(60);
+  await js(String.raw`const a = window.app; a.store.clear(); a.store.add({ id: 'wA', type: 'shape', kind: 'rect', x: 200, y: 200, w: 180, h: 110, rotation: 0, stroke: '#201f1e', fill: '#ffffff', lineWidth: 3, text: '' });
+    a.store.add({ id: 'wNote', type: 'note', x: 650, y: 180, w: 180, h: 180, color: '#ffd94a', text: '', rotation: 0 }); a.setSelection([]); a.surface.invalidate();`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: moveAway.x + 1, y: moveAway.y });
+  await sleep(60);
+  const gone = await js(String.raw`return window.app.interaction.arrowDots() ? 'shown' : 'gone';`);
+  check('arrows: moving well away from the shape lets its dots go', gone === 'gone', `dots are ${gone} with the mouse 300px away`);
+
+  await js(String.raw`window.app.setSelection(['wA']); window.app.surface.invalidate();`);
+  await sleep(60);
+  const topDot = await js(String.raw`
+    const it = window.app.interaction, sf = window.app.surface, r = sf.canvas.getBoundingClientRect();
+    const d = it.arrowDots(), n = d && d.dots.n && sf.cam.toScreen(d.dots.n.x, d.dots.n.y);
+    const box = sf.selectionScreenBox(), rot = { x: box.x + box.w / 2, y: box.y - 28 };
+    it._lastDownType = 'mouse';
+    const onRot = it.handleAt(rot), onDot = n ? it.handleAt(n) : 'no dot';
+    const dotUnder = n ? it.arrowDotAt(n)?.side : null;
+    // with a finger the grab circles are bigger and overlap: the nearer one wins
+    it._lastDownType = 'touch';
+    const fingerNearDot = n ? it.handleAt({ x: n.x, y: n.y + 6 }) : 'no dot';
+    const fingerNearRot = it.handleAt({ x: rot.x, y: rot.y - 6 });
+    it._lastDownType = 'mouse';
+    const bar = document.getElementById('ctxbar'), br = bar && bar.classList.contains('show') ? bar.getBoundingClientRect() : null;
+    const barClear = !br || !n || br.bottom <= n.y + r.top - 12 || br.top >= n.y + r.top + 12;
+    return { barClear, bar: br && Math.round(br.top) + '..' + Math.round(br.bottom), dots: d ? Object.keys(d.dots).join('') : '', gap: n ? Math.round(Math.hypot(n.x - rot.x, n.y - rot.y)) : -1,
+      onRot, onDot, dotUnder, fingerNearDot, fingerNearRot, n: n && { x: Math.round(n.x + r.left), y: Math.round(n.y + r.top) } };
+  `);
+  check('arrows: a selected shape keeps its top dot, above the rotate handle and clear of it',
+    topDot.dots === 'nesw' && topDot.gap >= 20 && topDot.onRot === 'rot' && topDot.onDot === null && topDot.dotUnder === 'n',
+    `dots: "${topDot.dots}" (wanted nesw), top dot to rotate handle: ${topDot.gap}px (wanted 20 or more), handle on the rotate spot: ${topDot.onRot} (wanted rot), handle on the top dot: ${topDot.onDot} (wanted none), dot there: ${topDot.dotUnder} (wanted n)`);
+  check('arrows: the selection bar floats clear of that top dot, so the mouse can reach it',
+    topDot.barClear, `selection bar spans y ${topDot.bar}, top dot at window y ${topDot.n && topDot.n.y} (wanted 12px or more between them)`);
+  check('arrows: with a finger, whichever of the top dot and the rotate handle is nearer is the one picked',
+    topDot.fingerNearDot === null && topDot.fingerNearRot === 'rot',
+    `finger just below the top dot picked handle ${topDot.fingerNearDot} (wanted none, the dot); finger just above the rotate handle picked ${topDot.fingerNearRot} (wanted rot)`);
+  if (topDot.n) {
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: topDot.n.x, y: topDot.n.y });
+    await sleep(80);
+    topDot.hoverState = await js(String.raw`const it = window.app.interaction, sf = window.app.surface, r = sf.canvas.getBoundingClientRect();
+      const sp = { x: ${topDot.n.x} - r.left, y: ${topDot.n.y} - r.top };
+      const d = it.arrowDots(); return JSON.stringify({ hot: it._hotDot, host: it._dotHost, hover: sf.hoverId, sel: [...sf.selection], handle: it.handleAt(sp), dot: it.arrowDotAt(sp)?.side, n: d?.dots.n && sf.cam.toScreen(d.dots.n.x, d.dots.n.y), sp, action: it.action?.type });`);
+    await mouseDrag(topDot.n, walkNote);
+  }
+  const fromTop = await js(String.raw`const a = window.app, c = a.store.objects.filter((o) => o.type === 'connector'); const s = a.store.get('wA'); return { n: c.length, a: c[0]?.a.id, b: c[0]?.b.id, rot: s.rotation };`);
+  check('arrows: dragging the top dot of a selected shape pulls out an arrow and does not turn the shape',
+    fromTop.n === 1 && fromTop.a === 'wA' && fromTop.b === 'wNote' && !fromTop.rot,
+    `arrows: ${fromTop.n}, from ${fromTop.a} to ${fromTop.b} (wanted wA to wNote), shape rotation: ${fromTop.rot} (wanted 0); with the mouse on the top dot: ${topDot.hoverState}`);
+
+  // 4. with the real mouse: the Arrow tool, drawn from a shape onto a note - and in empty space
+  await js(arrowSetup + String.raw`
+    rect('kA', 200, 200, 180, 110);
+    add({ id: 'kNote', type: 'note', x: 650, y: 180, w: 180, h: 180, color: '#ffd94a', text: '', rotation: 0 });
+    a.settings.shapeKind = 'arrow'; a.setTool('shape'); a.setSelection([]); sf.invalidate();
+  `);
+  await sleep(120);
+  const toolPts = await js(arrowHelpers + String.raw`return { from: scr(290, 255), to: scr(740, 270), e1: scr(300, 520), e2: scr(600, 560) };`);
+  await mouseDrag(toolPts.from, toolPts.to);
+  await mouseDrag(toolPts.e1, toolPts.e2);
+  const byTool = await js(String.raw`
+    const a = window.app;
+    const conns = a.store.objects.filter((o) => o.type === 'connector');
+    const shapes = a.store.objects.filter((o) => o.type === 'shape' && o.kind === 'arrow');
+    a.setTool('select');
+    a.settings.shapeKind = 'rect';
+    return { conns: conns.map((o) => (o.a.id || '-') + '→' + (o.b.id || '-') + ' ' + o.heads).join(', '), plain: shapes.length };
+  `);
+  check('arrows: the Arrow tool drawn from a shape onto a note makes an arrow that holds both; drawn in empty space it is the plain arrow as before',
+    byTool.conns === 'kA→kNote end' && byTool.plain === 1,
+    `arrows that hold on: "${byTool.conns}" (wanted "kA→kNote end"); plain arrow shapes: ${byTool.plain} (wanted 1)`);
+
+  // 5. with the real mouse: drag an end off one object and onto another; drag the middle to bend it
+  await js(arrowSetup + String.raw`
+    rect('eA', 150, 200, 160, 100); rect('eB', 650, 200, 160, 100); rect('eC', 650, 500, 160, 100);
+    const c = a.addConnector({ id: 'eA' }, { id: 'eB' }, { route: 'straight' });
+    a.setTool('select'); a.setSelection([c.id]); sf.invalidate();
+    window.__arrowId = c.id;
+  `);
+  await sleep(150);
+  const endPts = await js(arrowHelpers + String.raw`
+    const o = a.store.get(window.__arrowId), g = C.route(o), m = C.midPoint(o);
+    return { b: scr(g.b.x, g.b.y), c: scr(730, 550), mid: scr(m.x, m.y), midTo: scr(m.x, m.y - 120), empty: scr(900, 750) };
+  `);
+  const undo0 = await js(`return window.app.store.undoStack.length;`);
+  await mouseDrag(endPts.b, endPts.c);
+  const moved = await js(`const o = window.app.store.get(window.__arrowId); return { b: JSON.stringify({ id: o.b.id }), undo: window.app.store.undoStack.length };`);
+  // the end handle is now on eC's edge, not its middle
+  const onC = await js(arrowHelpers + String.raw`const g = C.route(a.store.get(window.__arrowId)); a.setSelection([window.__arrowId]); sf.invalidate(); return scr(g.b.x, g.b.y);`);
+  await sleep(80);
+  await mouseDrag(onC, endPts.empty);
+  const freed = await js(`const o = window.app.store.get(window.__arrowId); return { id: o.b.id || null, x: Math.round(o.b.x), y: Math.round(o.b.y) };`);
+  await js(`window.app.command('edit.undo'); window.app.command('edit.undo'); window.app.setSelection([window.__arrowId]); window.app.surface.invalidate();`);
+  await sleep(100);
+  const backOnB = await js(`const o = window.app.store.get(window.__arrowId); return o.b.id;`);
+  const midNow = await js(arrowHelpers + String.raw`const o = a.store.get(window.__arrowId), m = C.midPoint(o); return { mid: scr(m.x, m.y), to: scr(m.x, m.y - 120) };`);
+  await mouseDrag(midNow.mid, midNow.to);
+  const bent = await js(`const o = window.app.store.get(window.__arrowId); return { route: o.route, bend: Math.round((o.bend || 0) * 100) / 100 };`);
+  const emptyPt = await js(arrowHelpers + String.raw`return scr(900, 750);`);
+  check('arrows: dragging an end handle off one box and onto another moves the arrow to it, in one undo step',
+    moved.b === '{"id":"eC"}' && moved.undo === undo0 + 1, `end now holds ${moved.b} (wanted eC); undo steps added: ${moved.undo - undo0} (wanted 1)`);
+  check('arrows: dropped on empty board, the end lets go and stays where it was dropped; undo puts it back on the box',
+    freed.id === null && Math.abs(freed.x - 900) <= 3 && Math.abs(freed.y - 750) <= 3 && backOnB === 'eB',
+    `end holds ${freed.id} at (${freed.x},${freed.y}) (wanted nothing, at about (900,750)); after two undos it holds ${backOnB} (wanted eB)`);
+  check('arrows: dragging the middle diamond bends a straight arrow into a curve',
+    bent.route === 'curved' && Math.abs(bent.bend) > 0.3, `route ${bent.route}, bend ${bent.bend}`);
+
+  // 6. the selection bar: Straight, Elbow, Curved - and the next arrow is drawn the same way
+  const barRoute = await js(String.raw`
+    const a = window.app;
+    a.setSelection([window.__arrowId]);
+    await new Promise((res) => setTimeout(res, 120));
+    const btns = [...document.querySelectorAll('#ctxbar [data-route]')];
+    const before = btns.map((b) => b.dataset.route + (b.classList.contains('on') ? '*' : '')).join(' ');
+    btns.find((b) => b.dataset.route === 'elbow')?.click();
+    await new Promise((res) => setTimeout(res, 120));
+    const after = [...document.querySelectorAll('#ctxbar [data-route]')].map((b) => b.dataset.route + (b.classList.contains('on') ? '*' : '')).join(' ');
+    const colour = !!document.querySelector('#ctxbar .colour-btn');
+    const route = a.store.get(window.__arrowId).route;
+    const next = a.addConnector({ x: 0, y: 0 }, { x: 100, y: 100 });
+    const nextRoute = next.route;
+    a.settings.arrowRoute = 'straight'; a.saveSettings();
+    a.store.clear();
+    return { before, after, route, nextRoute, colour, remembered: nextRoute };
+  `);
+  check('arrows: the selection bar offers Straight, Elbow and Curved, shows which is on, and switches it',
+    barRoute.before === 'straight elbow curved*' && barRoute.after === 'straight elbow* curved' && barRoute.route === 'elbow' && barRoute.colour,
+    `buttons before: "${barRoute.before}", after pressing Elbow: "${barRoute.after}", arrow is now ${barRoute.route}, colour button: ${barRoute.colour}`);
+  check('arrows: the next arrow drawn comes out the way the last one was switched to',
+    barRoute.nextRoute === 'elbow', `next arrow's route: ${barRoute.nextRoute} (wanted elbow)`);
+
+  // 7. moving things, copying, pasting, deleting
+  const arrowLife = await js(arrowSetup + String.raw`
+    const r = {};
+    rect('lA', 100, 100); rect('lB', 500, 100);
+    const c = a.addConnector({ id: 'lA' }, { id: 'lB' }, { route: 'straight' });
+    // move both boxes together: the arrow comes along
+    a.setSelection(['lA', 'lB']);
+    const ids = ['lA', 'lB'];
+    const snap = a.store.snapshot(ids);
+    for (const id of ids) { const o = a.store.get(id); o.x += 50; o.y += 300; }
+    a.store.commitSnapshot('move', snap);
+    let g = C.route(a.store.get(c.id));
+    r.followed = Math.abs(g.a.y - 450) < 1 && Math.abs(g.b.y - 450) < 1;
+    r.followedAt = pt(g.a) + ' → ' + pt(g.b);
+    // an arrow with one free end, moved on its own: the free end goes with it, the held end stays
+    const f = a.addConnector({ id: 'lA' }, { x: 300, y: 800 }, { route: 'straight' });
+    const { translateObject } = await import('app://board/js/core/transform.js');
+    const snapF = a.store.snapshot([f.id]);
+    translateObject(a.store.get(f.id), 40, 0);
+    a.store.commitSnapshot('move', snapF);
+    g = C.route(a.store.get(f.id));
+    r.loneMove = pt(g.a) + ' → ' + pt(g.b);
+    r.loneOk = g.attachedA && Math.abs(g.b.x - 340) < 0.5 && Math.abs(g.b.y - 800) < 0.5;
+    // copy the two boxes (not the arrow) and paste: the arrow between them comes too, holding the copies
+    a.store.remove([f.id]);
+    a.setSelection(['lA', 'lB']);
+    a.copy();
+    a.paste();
+    await new Promise((res) => setTimeout(res, 60));
+    const conns = a.store.objects.filter((o) => o.type === 'connector');
+    const copyArrow = conns.find((o) => o.id !== c.id);
+    r.pasted = conns.length;
+    r.copyHolds = copyArrow ? [copyArrow.a.id, copyArrow.b.id].join(',') : '(none)';
+    r.copyOk = !!copyArrow && copyArrow.a.id && copyArrow.b.id && copyArrow.a.id !== 'lA' && copyArrow.b.id !== 'lB' && !!a.store.get(copyArrow.a.id) && !!a.store.get(copyArrow.b.id);
+    // duplicate the arrow on its own: the copy lets go of both boxes
+    a.setSelection([c.id]);
+    a.command('edit.duplicate');
+    const dup = a.store.objects.filter((o) => o.type === 'connector').find((o) => o.id !== c.id && o !== copyArrow);
+    r.dupFree = dup ? JSON.stringify([dup.a.id || null, dup.b.id || null]) : '(none)';
+    // delete a box: the arrow stays, its end where it last was; undo and it holds on again
+    const before = pt(C.route(a.store.get(c.id)).b);
+    a.store.remove(['lB']);
+    g = C.route(a.store.get(c.id));
+    r.afterDelete = pt(g.b) + ' (was ' + before + ')';
+    r.deleteOk = !!a.store.get(c.id) && !g.attachedB && pt(g.b) === before;
+    a.store.undo();
+    r.reattached = C.route(a.store.get(c.id)).attachedB;
+    // saved and opened again: the arrow still holds both boxes
+    const saved = JSON.parse(JSON.stringify(a.store.toJSON()));
+    a.store.load(saved);
+    const back = a.store.get(c.id);
+    g = back && C.route(back);
+    r.reloaded = !!g && g.attachedA && g.attachedB && back.a.id === 'lA' && back.b.id === 'lB';
+    // a file read by something that does not know arrows still finds a box on it
+    const raw = saved.objects.find((x) => x.id === c.id);
+    r.savedBox = raw && raw.w > 0 && raw.h > 0 && Number.isFinite(raw.a.x);
+    // leave nothing on the board's own clipboard: later checks paste from the system one
+    a.clipboard = []; a.clipStamp = null;
+    a.store.clear();
+    return r;
+  `);
+  check('arrows: move the two boxes and the arrow between them comes along',
+    arrowLife.followed, `ends now at ${arrowLife.followedAt} (wanted y≈450 on both)`);
+  check('arrows: an arrow moved on its own takes its free end with it and keeps hold of the box',
+    arrowLife.loneOk, `ends at ${arrowLife.loneMove} (wanted the free end at (340,800))`);
+  check('arrows: copying two boxes copies the arrow between them, and the copy holds the copies',
+    arrowLife.pasted === 2 && arrowLife.copyOk, `arrows after paste: ${arrowLife.pasted} (wanted 2); the copy holds ${arrowLife.copyHolds}`);
+  check('arrows: an arrow duplicated on its own lets go of both boxes',
+    arrowLife.dupFree === '[null,null]', `duplicate holds ${arrowLife.dupFree} (wanted [null,null])`);
+  check('arrows: delete a box and the arrow stays, its end where it was; undo and it holds on again',
+    arrowLife.deleteOk && arrowLife.reattached, `end after delete ${arrowLife.afterDelete}; holds again after undo: ${arrowLife.reattached}`);
+  check('arrows: saved and opened again, an arrow still holds both boxes; the file carries its ends and box',
+    arrowLife.reloaded && arrowLife.savedBox, `still holds both: ${arrowLife.reloaded}; saved with ends and a box: ${arrowLife.savedBox}`);
+
+  // 8. drawing: on screen (light and dark), in a PNG, in an SVG; picked by a click, rubbed out by the eraser
+  const arrowDraw = await js(arrowSetup + String.raw`
+    const r = {};
+    const R = await import('app://board/js/core/render.js');
+    rect('dA', 100, 100); rect('dB', 500, 100);
+    const c = a.addConnector({ id: 'dA' }, { id: 'dB' }, { route: 'straight' });
+    a.setSelection([]); sf.invalidate();
+    const g = C.route(c);
+    const mid = { x: (g.a.x + g.b.x) / 2, y: (g.a.y + g.b.y) / 2 };
+    // export: dark ink on white at the middle of the arrow
+    const box = { x: mid.x - 10, y: mid.y - 10, w: 20, h: 20 };
+    const cv = a.surface.renderTo(box, 1, true);
+    const px = cv.getContext('2d').getImageData(10, 10, 1, 1).data;
+    r.exportPixel = [px[0], px[1], px[2]].join(',');
+    r.exportDark = px[0] < 90 && px[1] < 90 && px[2] < 90;
+    // on a dark board the default arrow is drawn light, like default ink
+    const was = R.isDarkBoard();
+    R.setDarkBoard(true);
+    const c2 = document.createElement('canvas'); c2.width = 20; c2.height = 20;
+    const x2 = c2.getContext('2d'); x2.fillStyle = '#1f1e1d'; x2.fillRect(0, 0, 20, 20);
+    x2.translate(-box.x, -box.y); R.drawObject(x2, a.store.get(c.id));
+    const d = x2.getImageData(10, 10, 1, 1).data;
+    R.setDarkBoard(was);
+    r.darkPixel = [d[0], d[1], d[2]].join(',');
+    r.darkLight = d[0] > 180 && d[1] > 180;
+    // SVG
+    const { buildSvg } = await import('app://board/js/export.js');
+    const svg = buildSvg(a, { x: 0, y: 0, w: 900, h: 400 });
+    r.svg = /<path d="M[\d. ]+L[\d. ]+"[^>]*stroke="#201f1e"/.test(svg) && /<polygon points=/.test(svg);
+    // a click on the line picks the arrow; a click 20 units off it does not
+    const { pick } = await import('app://board/js/core/hit.js');
+    r.pickOn = pick(a.store, mid, 6)?.id === c.id;
+    r.pickOff = pick(a.store, { x: mid.x, y: mid.y + 20 }, 6)?.id || null;
+    // the eraser (whole objects) rubs it out like anything else
+    a.settings.eraserMode = 'object'; a.settings.eraserSize = 30;
+    const it = a.interaction;
+    it.startErase({ x: mid.x, y: mid.y - 40 }); it.eraseSweep(it.action, { x: mid.x, y: mid.y - 40 }, { x: mid.x, y: mid.y + 40 }); it.finishErase(it.action); it.action = null;
+    // the eraser takes ink and nothing else, so the arrow - like a shape - is left alone
+    r.erased = !!a.store.get(c.id);
+    a.store.clear();
+    return r;
+  `);
+  check('arrows: exported, an arrow is dark ink on white paper; on a dark board the default arrow is drawn light',
+    arrowDraw.exportDark && arrowDraw.darkLight, `export pixel on the line ${arrowDraw.exportPixel} (wanted dark); dark-board pixel ${arrowDraw.darkPixel} (wanted light)`);
+  check('arrows: an SVG export has the arrow as a path with its head',
+    arrowDraw.svg === true, `path and head found in the SVG: ${arrowDraw.svg}`);
+  check('arrows: a click on the line picks the arrow, a click beside it does not; the eraser leaves it alone, as it does shapes',
+    arrowDraw.pickOn && arrowDraw.pickOff === null && arrowDraw.erased, `on the line: ${arrowDraw.pickOn}; 20 units off: ${arrowDraw.pickOff} (wanted nothing); still there after the eraser: ${arrowDraw.erased}`);
+
+  // 9. awkward cases
+  const arrowOdd = await js(arrowSetup + String.raw`
+    const r = {};
+    rect('oA', 100, 100); rect('oB', 140, 130);       // overlapping boxes
+    const c = a.addConnector({ id: 'oA' }, { id: 'oB' }, { route: 'straight' });
+    let ok = true; const errs = [];
+    for (const k of ['straight', 'elbow', 'curved']) {
+      a.store.updateMany([c.id], { route: k }, 'x');
+      try { const g = C.route(a.store.get(c.id)); if (!g.pts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) { ok = false; errs.push(k + ' NaN'); } }
+      catch (e) { ok = false; errs.push(k + ' ' + e.message); }
+    }
+    r.overlap = ok ? 'ok' : errs.join('; ');
+    // both ends on the same box: the second end does not grab it
+    const it = a.interaction;
+    r.sameTwice = JSON.stringify(it.arrowTarget({ x: 110, y: 110 }, { id: 'oA' }));   // a point on oA only
+    // rotate and resize a group holding an arrow with a free end: no crash, the free end moves
+    const f = a.addConnector({ id: 'oA' }, { x: 600, y: 600 }, { route: 'curved' });
+    const { rotateObjectAround, scaleObject } = await import('app://board/js/core/transform.js');
+    const o = a.store.get(f.id);
+    rotateObjectAround(o, Math.PI / 2, 600, 400);
+    const afterRot = { x: Math.round(o.b.x), y: Math.round(o.b.y) };
+    scaleObject(o, 0.5, 0.5, 0, 0);
+    const g = C.route(o);
+    r.rotated = afterRot.x === 400 && afterRot.y === 400 && o.rotation === 0;
+    r.scaled = Math.round(g.b.x) === 200 && Math.round(g.b.y) === 200;
+    r.rotAt = JSON.stringify(afterRot) + ' then ' + JSON.stringify({ x: Math.round(g.b.x), y: Math.round(g.b.y) });
+    // a board with an arrow opened as a thumbnail elsewhere: the ends' last places are used, no crash
+    const other = { id: 'elsewhere', schema: 2, background: { color: '#fff', pattern: 'none' }, pages: [], order: ['x1'],
+      objects: { x1: { id: 'x1', type: 'connector', route: 'elbow', a: { id: 'nope', x: 10, y: 10 }, b: { id: 'nope2', x: 200, y: 120 }, heads: 'end', stroke: '#201f1e', lineWidth: 3, x: 0, y: 0, w: 0, h: 0 } } };
+    try { const g2 = C.route(other.objects.x1); r.thumb = g2.a.x === 10 && g2.b.y === 120 ? 'ok' : JSON.stringify(g2.a) + JSON.stringify(g2.b); } catch (e) { r.thumb = e.message; }
+    a.store.clear();
+    return r;
+  `);
+  check('arrows: overlapping boxes, any route, never produce a broken arrow',
+    arrowOdd.overlap === 'ok', arrowOdd.overlap);
+  check('arrows: an end cannot hold the same box as the other end',
+    arrowOdd.sameTwice === 'null', `second end on the same box would hold ${arrowOdd.sameTwice} (wanted nothing)`);
+  check('arrows: turned and resized with a group, an arrow moves its free end and never turns itself',
+    arrowOdd.rotated && arrowOdd.scaled, `free end after a quarter turn about (600,400) and halving: ${arrowOdd.rotAt} (wanted (400,400) then (200,200))`);
+  check('arrows: an arrow whose boxes are not on this board is drawn from its ends\' last places',
+    arrowOdd.thumb === 'ok', arrowOdd.thumb);
+  }
+
   check('and pressing that button brings the work onto the page, losing none of it',
     sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
     sizeMenu.offerGoneWhenNothingStray === true,

@@ -7,7 +7,7 @@ import { PEN_COLORS, NOTE_COLORS, TEXT_COLORS, SHAPE_STROKES, SHAPE_FILLS } from
 import { inkPaint } from '../core/render.js';
 
 // kinds whose default ink the board draws light on a dark theme (notes and tables keep their own dark ink)
-const FOLLOWS_BOARD = new Set(['stroke', 'shape', 'text', 'math']);
+const FOLLOWS_BOARD = new Set(['stroke', 'shape', 'text', 'math', 'connector']);
 
 function item(label, iconName, onClick, opts = {}) {
   const b = h('button', { class: 'menu-item' + (opts.danger ? ' danger' : '') },
@@ -156,12 +156,12 @@ export function updateSelectionBar(app) {
   };
 
   // colour control, only for the things that actually have a colour
-  const COLOURABLE = new Set(['stroke', 'shape', 'note', 'text', 'table', 'math']);
+  const COLOURABLE = new Set(['stroke', 'shape', 'note', 'text', 'table', 'math', 'connector']);
   if (types.size === 1 && COLOURABLE.has([...types][0])) {
     const type = [...types][0];
     const swatch = h('button', { class: 'colour-btn', title: t('Colour') });
     const dot = h('span', {});
-    const currentColor = type === 'shape' ? sel[0].stroke : sel[0].color;
+    const currentColor = type === 'shape' || type === 'connector' ? sel[0].stroke : sel[0].color;
     // the dot shows the colour as it is drawn: default ink is light on a dark board, so the dot is too
     const shownColor = FOLLOWS_BOARD.has(type) ? inkPaint(currentColor) : (currentColor || '#201f1e');
     dot.style.cssText = `width:17px;height:17px;border-radius:50%;background:${shownColor};box-shadow:inset 0 0 0 1px rgba(128,128,128,.45)`;
@@ -172,6 +172,18 @@ export function updateSelectionBar(app) {
   }
 
   if (covers.length) bar.appendChild(revealBtn());
+
+  // arrows: straight, elbow or curved
+  if (types.size === 1 && types.has('connector')) {
+    const now = sel.every((o) => o.route === sel[0].route) ? (sel[0].route || 'straight') : null;
+    for (const [route, label, ic] of [['straight', t('Straight arrow'), 'arrowStraight'], ['elbow', t('Elbow arrow'), 'arrowElbow'], ['curved', t('Curved arrow'), 'arrowCurved']]) {
+      const b = mk(label, ic, () => { app.command('arrow.' + route); updateSelectionBar(app); });
+      b.dataset.route = route;
+      if (now === route) b.classList.add('on');
+      bar.appendChild(b);
+    }
+    bar.appendChild(h('span', { class: 'bar-sep' }));
+  }
 
   if ([...types].every((t) => ['note', 'text', 'shape', 'table'].includes(t)) && sel.length === 1)
     bar.appendChild(mk(t('Edit text (F2)'), 'text', () => app.beginTextEdit(sel[0])));
@@ -214,7 +226,7 @@ export function updateSelectionBar(app) {
 
   appendMoreActions(app, bar);
 
-  placeBar(bar, box);
+  placeBar(bar, box, !!app.interaction?.selectionHasDots?.());
 }
 
 function appendMoreActions(app, bar) {
@@ -230,21 +242,26 @@ function appendMoreActions(app, bar) {
   bar.appendChild(button);
 }
 
-function placeBar(bar, box) {
+/*
+ * Above the selection, clear of its rotate handle - and, when the selection
+ * has arrow dots, clear of the top dot too, which sits above that handle
+ * (and of the bottom dot, when there is no room above and the bar goes below).
+ */
+function placeBar(bar, box, dots = false) {
   bar.classList.add('show');
   const stage = document.getElementById('stage').getBoundingClientRect();
   const w = bar.offsetWidth || 200;
   let left = box.x + box.w / 2 - w / 2;
   left = Math.max(8, Math.min(left, stage.width - w - 8));
-  let top = box.y - bar.offsetHeight - 44;
-  if (top < 8) top = Math.min(box.y + box.h + 12, stage.height - bar.offsetHeight - 80);
+  let top = box.y - bar.offsetHeight - (dots ? 66 : 44);
+  if (top < 8) top = Math.min(box.y + box.h + (dots ? 34 : 12), stage.height - bar.offsetHeight - 80);
   top = Math.max(8, Math.min(top, stage.height - bar.offsetHeight - 8));
   bar.style.left = left + 'px';
   bar.style.top = top + 'px';
 }
 
 function openColorPopover(app, anchor, type, sel) {
-  const colors = type === 'note' ? NOTE_COLORS : (type === 'text' || type === 'math') ? TEXT_COLORS : type === 'shape' ? SHAPE_STROKES : PEN_COLORS;
+  const colors = type === 'note' ? NOTE_COLORS : (type === 'text' || type === 'math') ? TEXT_COLORS : (type === 'shape' || type === 'connector') ? SHAPE_STROKES : PEN_COLORS;
   const grid = h('div', { class: 'swatches' });
   for (const c of colors) {
     const b = h('button', { class: 'sw', title: c });
@@ -256,7 +273,7 @@ function openColorPopover(app, anchor, type, sel) {
       b.title = t('{c} — follows the board: light on dark, black on white and in exports', { c });
     }
     b.addEventListener('click', () => {
-      const key = type === 'shape' ? 'stroke' : 'color';
+      const key = type === 'shape' || type === 'connector' ? 'stroke' : 'color';
       /*
        * Only the selection changes. Recolouring one sticky note, one line of
        * text or one stroke used to quietly become the colour of the NEXT one

@@ -3,7 +3,8 @@
 import './platform/platform.js';
 import { t, translatePage, currentLanguage } from './i18n.js';
 import { loadInstalled, onFontsChanged, packFor, isInstalled, download as downloadFontPack, sizeLabel } from './fontpack.js';
-import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf } from './core/store.js';
+import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf, setConnectorBounds } from './core/store.js';
+import { useConnectorStore, connectorBounds, ROUTES, holds } from './core/connectors.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
 import { Interaction } from './core/tools.js';
@@ -62,7 +63,7 @@ export const DEFAULT_SETTINGS = {
   noteColor: '#ffd94a', noteSize: 200, noteFont: 'hand',
   emojiChar: '\u2705', emojiSize: 96, emojiRecent: [],
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
-  shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
+  shapeKind: 'rect', arrowRoute: 'straight', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
   edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, laserColor: '#ff2d2d',
@@ -165,6 +166,9 @@ class App {
     translatePage();
     window.board?.setLanguage?.(currentLanguage());
     this.store = new Store();
+    // arrows look up the things they hold on to on this board
+    useConnectorStore(this.store);
+    setConnectorBounds(connectorBounds);
     this.settings = this.loadSettings();
     // Before the Surface exists, so the very first frame is already the right
     // colour rather than a white flash that corrects itself a moment later.
@@ -1713,6 +1717,7 @@ class App {
       // the menu accelerator or the page saw the key first.
       case 'edit.paste': return this.pasteAt(null);
       case 'edit.duplicate': this.duplicate(); break;
+      case 'arrow.straight': case 'arrow.elbow': case 'arrow.curved': this.setArrowRoute(id.slice(6)); break;
       case 'edit.group': this.groupSelection(); break;
       case 'edit.ungroup': this.ungroupSelection(); break;
       case 'edit.nameGroup': this.nameGroup(); break;
@@ -1911,6 +1916,14 @@ class App {
    */
   withRiders(objs) {
     const ids = new Set(withAttached(this.store, objs.map((o) => o.id)));
+    // An arrow between two things that are both being copied is part of what
+    // is being copied - a copied diagram that lost its arrows is half a copy.
+    const gids = new Set();
+    for (const id of ids) { const g = this.store.get(id)?.groupId; if (g) gids.add(g); }
+    const inSet = (e) => !!e && ((e.id && ids.has(e.id)) || (e.group && gids.has(e.group)));
+    for (const o of this.store.objects) {
+      if (o?.type === 'connector' && !ids.has(o.id) && inSet(o.a) && inSet(o.b)) ids.add(o.id);
+    }
     return this.store.doc.order.filter((id) => ids.has(id)).map((id) => this.store.get(id)).filter(Boolean);
   }
 
@@ -1920,6 +1933,37 @@ class App {
    * copy of that page - not on the original. Ink copied without its page is
    * simply loose ink.
    */
+  /**
+   * A new arrow from `a` to `b` - each an end spec: { id } or { group } to hold
+   * on to something, or just { x, y } for a free end. It wears the shape tool's
+   * outline colour, thickness and dashes, and the route last chosen.
+   */
+  addConnector(a, b, { heads = 'end', route = this.settings.arrowRoute } = {}) {
+    const s = this.settings;
+    const o = {
+      id: uid('c'), type: 'connector', route: ROUTES.includes(route) ? route : 'straight',
+      a: { ...a }, b: { ...b }, heads,
+      stroke: s.shapeStroke || '#201f1e', lineWidth: s.shapeLineWidth || 3, dash: s.shapeDash || null,
+      x: 0, y: 0, w: 0, h: 0, rotation: 0
+    };
+    connectorBounds(o);
+    this.store.add(o, 'arrow');
+    return o;
+  }
+
+  /** Straight, elbow or curved, for the selected arrows - and for the next one drawn. */
+  setArrowRoute(route) {
+    if (!ROUTES.includes(route)) return;
+    this.settings.arrowRoute = route;
+    this.saveSettings();
+    const arrows = this.selected.filter((o) => o.type === 'connector' && !o.locked);
+    if (arrows.length) {
+      this.store.updateMany(arrows.map((o) => o.id), { route }, 'arrow shape');
+      this.surface.invalidate();
+    }
+    this.syncUI();
+  }
+
   cloneBatch(objs, dx, dy) {
     const ids = new Map();
     const copies = objs.map((o) => { const c = this.cloneWithOffset(o, dx, dy); ids.set(o.id, c.id); return c; });
@@ -1928,7 +1972,22 @@ class App {
       if (ids.has(c.attachedTo)) c.attachedTo = ids.get(c.attachedTo);
       else delete c.attachedTo;
     }
-    return this.regroup(copies);
+    const groupsBefore = copies.map((c) => c.groupId);
+    this.regroup(copies);
+    const groups = new Map();
+    copies.forEach((c, i) => { if (groupsBefore[i]) groups.set(groupsBefore[i], c.groupId); });
+    // A copied arrow holds on to the copies of what it held. An end whose
+    // object was not copied lets go, and stays where the copy put it.
+    for (const c of copies) {
+      if (c.type !== 'connector') continue;
+      for (const k of ['a', 'b']) {
+        const e = c[k];
+        if (!e) continue;
+        if (e.id) { if (ids.has(e.id)) e.id = ids.get(e.id); else delete e.id; }
+        if (e.group) { if (groups.has(e.group)) e.group = groups.get(e.group); else delete e.group; }
+      }
+    }
+    return copies;
   }
 
   copy() {
@@ -2057,7 +2116,7 @@ class App {
     if (c.type === 'stroke') {
       for (const p of c.points) { p.x += dx; p.y += dy; }
       c.bbox = { ...c.bbox, x: c.bbox.x + dx, y: c.bbox.y + dy };
-    } else { c.x += dx; c.y += dy; }
+    } else translateObject(c, dx, dy);
     delete c.locked;
     return c;
   }

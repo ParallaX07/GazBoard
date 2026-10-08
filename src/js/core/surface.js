@@ -6,6 +6,7 @@ import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect } from './util.js';
 import { currentLanguage } from '../i18n.js';
+import { route as connectorRoute, midPoint } from './connectors.js';
 
 export class Surface {
   /**
@@ -703,7 +704,11 @@ export class Surface {
       }
     }
 
-    if (this.selection.size) {
+    const lone = this.selection.size === 1 ? this.store.get([...this.selection][0]) : null;
+    if (lone && lone.type === 'connector') {
+      // an arrow on its own is handled by its ends and its middle, not by a box
+      this.drawArrowChrome(ctx, lone);
+    } else if (this.selection.size) {
       const locked = this.selectionIsLocked();
       if (this.selection.size > 1) for (const id of this.selection) { const o = this.store.get(id); if (o) drawMemberOutline(ctx, cam, o); }
       const box = this.selectionScreenBox();
@@ -720,6 +725,39 @@ export class Surface {
     // The laser goes on last: it is a pointing device, so it belongs above
     // everything, selection handles included.
     this.drawLaser(ctx);
+  }
+
+  /** A selected arrow: a ring at each end (filled when it holds on to something) and a diamond in the middle. */
+  drawArrowChrome(ctx, o) {
+    const cam = this.cam;
+    const r = connectorRoute(o);
+    ctx.save();
+    // a faint highlight along the arrow, so it reads as selected
+    ctx.strokeStyle = 'rgba(0,120,212,0.35)';
+    ctx.lineWidth = (o.lineWidth || 3) * cam.z + 6;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    r.pts.forEach((p, i) => { const q = cam.toScreen(p.x, p.y); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
+    ctx.stroke();
+    if (!o.locked) {
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#0078d4';
+      for (const [p, held] of [[r.a, r.attachedA], [r.b, r.attachedB]]) {
+        const q = cam.toScreen(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = held ? '#0078d4' : '#ffffff';
+        ctx.fill(); ctx.stroke();
+      }
+      if (r.kind !== 'elbow') {
+        const m = midPoint(o), q = cam.toScreen(m.x, m.y);
+        ctx.beginPath();
+        ctx.moveTo(q.x, q.y - 6); ctx.lineTo(q.x + 6, q.y); ctx.lineTo(q.x, q.y + 6); ctx.lineTo(q.x - 6, q.y); ctx.closePath();
+        ctx.fillStyle = '#ffffff';
+        ctx.fill(); ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   /**
