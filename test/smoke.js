@@ -7237,8 +7237,15 @@ async function run(win, app) {
     a.settings.shapeKind = 'arrow'; a.setTool('shape'); a.setSelection([]); sf.invalidate();
   `);
   await sleep(120);
-  const toolPts = await js(arrowHelpers + String.raw`return { from: scr(290, 255), to: scr(740, 270), e1: scr(300, 520), e2: scr(600, 560) };`);
+  // The empty-space arrow is drawn just below the shapes rather than far down
+  // the window: the macOS runner's window is shorter, and lower down the press
+  // landed on the toolbar instead of the board.
+  const toolPts = await js(arrowHelpers + String.raw`return { from: scr(290, 255), to: scr(740, 270), e1: scr(300, 390), e2: scr(560, 420) };`);
   await mouseDrag(toolPts.from, toolPts.to);
+  const emptyAt = await js(String.raw`
+    const a = window.app, el = document.elementFromPoint(${toolPts.e1.x}, ${toolPts.e1.y}), el2 = document.elementFromPoint(${toolPts.e2.x}, ${toolPts.e2.y});
+    return { under: el ? (el.id || el.className || el.tagName) : 'nothing', under2: el2 ? (el2.id || el2.className || el2.tagName) : 'nothing', tool: a.tool, kind: a.settings.shapeKind, win: innerWidth + 'x' + innerHeight };
+  `);
   await mouseDrag(toolPts.e1, toolPts.e2);
   const byTool = await js(String.raw`
     const a = window.app;
@@ -7250,7 +7257,8 @@ async function run(win, app) {
   `);
   check('arrows: the Arrow tool drawn from a shape onto a note makes an arrow that holds both; drawn in empty space it is the plain arrow as before',
     byTool.conns === 'kA→kNote end' && byTool.plain === 1,
-    `arrows that hold on: "${byTool.conns}" (wanted "kA→kNote end"); plain arrow shapes: ${byTool.plain} (wanted 1)`);
+    `arrows that hold on: "${byTool.conns}" (wanted "kA→kNote end"); plain arrow shapes: ${byTool.plain} (wanted 1); ` +
+    `before the empty-space drag: tool ${emptyAt.tool}, shape ${emptyAt.kind}, window ${emptyAt.win}, under its start: ${emptyAt.under}, under its end: ${emptyAt.under2}`);
 
   // 5. with the real mouse: drag an end off one object and onto another; drag the middle to bend it
   await js(arrowSetup + String.raw`
