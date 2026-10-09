@@ -132,7 +132,6 @@ jobs:
           # SHA-256 of appimagetool-x86_64.AppImage for the version above.
           # Bump both together and recompute with: sha256sum <downloaded file>
           APPIMAGETOOL_SHA256: '46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1'
-          APPIMAGE_EXTRACT_AND_RUN: '1'   # the runner has no FUSE for appimagetool itself
           ARCH: x86_64
         run: |
           set -euo pipefail
@@ -165,7 +164,11 @@ jobs:
 
           # Run from the output directory: the .zsync is written beside the
           # new AppImage, named "<AppImage name>.zsync".
-          ( cd "$WORK/out" && "$TOOL" --no-appstream -u "$UPDATE_INFO" "$WORK/squashfs-root" "$NAME" )
+          # APPIMAGE_EXTRACT_AND_RUN is set for this one command only (the runner
+          # has no FUSE for appimagetool itself). Left set for the whole step,
+          # it would make the repacked AppImage launch the app instead of
+          # answering --appimage-updateinformation below.
+          ( cd "$WORK/out" && APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$WORK/squashfs-root" "$NAME" )
 
           # Both files must exist and be non-empty, or the release does not go out.
           test -s "$WORK/out/$NAME"       || { echo "::error::repacked AppImage is missing or empty"; exit 1; }
@@ -173,7 +176,7 @@ jobs:
 
           # The embedded update information must be exactly what we asked for.
           chmod +x "$WORK/out/$NAME"
-          GOT="$("$WORK/out/$NAME" --appimage-updateinformation)"
+          GOT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$WORK/out/$NAME" --appimage-updateinformation)"
           if [ "$GOT" != "$UPDATE_INFO" ]; then
             echo "::error::update information mismatch"
             echo "expected: $UPDATE_INFO"
