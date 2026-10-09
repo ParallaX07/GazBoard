@@ -8,7 +8,7 @@
 // in the app mutates the document directly.
 
 import { uid, unionBox } from './util.js';
-import { pagesFrom, pageRects, cleanPage } from './pages.js';
+import { pagesFrom, pageRects, cleanPage, DATE_RE } from './pages.js';
 import { t } from '../i18n.js';
 
 export const CLIENT_ID = uid('c');
@@ -326,6 +326,7 @@ export class Store {
     // Left undefined when there is none, so it never appears in the JSON.
     return { id: d.id, name: d.name, schema: 2, created: d.created, modified: d.modified,
       origin: d.origin || undefined,
+      pageDates: d.pageDates && d.pageDates.length ? d.pageDates.slice() : undefined,
       background: d.background, pages: d.pages.map((p) => ({ ...p })), page: d.pages[0] || null,
       camera: d.camera, objects: d.order.map((id) => d.objects[id]).filter(Boolean), ...extra };
   }
@@ -347,6 +348,8 @@ export class Store {
     if (data.origin) d.origin = data.origin;
     d.background = { ...d.background, ...(data.background || {}) };
     d.pages = pagesFrom(data);
+    // the days the sheets were started, kept while the board is an infinite canvas (see App.setPageSize)
+    if (Array.isArray(data.pageDates)) d.pageDates = data.pageDates.map((x) => (typeof x === 'string' && DATE_RE.test(x) ? x : null));
     d.camera = data.camera || d.camera;
     const list = Array.isArray(data.objects) ? data.objects
       : Array.isArray(data.objectList) ? data.objectList

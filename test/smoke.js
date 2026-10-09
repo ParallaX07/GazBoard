@@ -6470,6 +6470,11 @@ async function run(win, app) {
       a.store.undo(); note('undo A5');
       const langWas = I.currentLanguage();
       await I.setLanguage('bn'); note('Bangla'); await I.setLanguage(langWas); note('back');
+      // to an infinite canvas and back to paper, then something rubbed out
+      await a.setPageSize('infinite'); await a.setPageSize('a4', 'portrait'); note('infinite and back');
+      a.store.add({ id: 'nbs2', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none',
+        points: [{ x: 10, y: 10, p: .5 }, { x: 60, y: 30, p: .5 }], bbox: { x: 10, y: 10, w: 50, h: 20 }, rotation: 0 });
+      a.store.remove(['nbs2']); note('erase');
       r.seen = seen;
       r.allSame = seen.every((x) => x.endsWith(':2026-09-29'));
 
@@ -6501,7 +6506,7 @@ async function run(win, app) {
   check('picking Notebook in the Canvas panel dates the sheet with the day it is (faked: Tue 29 Sep)',
     nbFixed.foundTile && nbFixed.pattern === 'notebook' && nbFixed.made === '2026-09-29' && nbFixed.dateSwitch,
     `tile found: ${nbFixed.foundTile} ("${nbFixed.tileLabel}"), pattern now ${nbFixed.pattern}, page dated ${nbFixed.made} (wanted 2026-09-29), date switch shown: ${nbFixed.dateSwitch}`);
-  check('1. the date stays fixed once written - ink, undo, redo, zoom, spacing, pattern away and back, page size and language leave it alone',
+  check('1. the date stays fixed once written - ink, undo, redo, zoom, spacing, pattern away and back, page size, language, infinite canvas and back, and erasing leave it alone',
     nbFixed.allSame === true, nbFixed.seen.join(', '));
   check('5. the date travels with the board: saved, then opened a week later on a machine with the date switched off',
     nbFixed.savedDate === '2026-09-29' && nbFixed.reopened === '2026-09-29' && nbFixed.bgDate !== false,
@@ -6512,6 +6517,31 @@ async function run(win, app) {
   check('5. opening it changes nothing - no undo step, not marked as edited',
     nbFixed.reopenUndo === 0 && nbFixed.modifiedKept,
     `${nbFixed.reopenUndo} thing(s) to undo (wanted 0); last-modified ${nbFixed.modifiedWas} -> ${nbFixed.modifiedNow}`);
+
+  // a pad of three sheets turned into an infinite canvas and back keeps its sheets and their days
+  const nbRound = await js(String.raw`
+    const { P, day, realNow } = window.__nb;
+    const a = window.app, r = {};
+    try {
+      P.pageClock.now = day(2026, 10, 1);
+      a.newBoard(true);
+      await a.setPageSize('a4', 'portrait');
+      P.pageClock.now = day(2026, 10, 2); a.addPage(0);
+      P.pageClock.now = day(2026, 10, 3); a.addPage(1);
+      const dates = () => a.store.pages.map((p) => (p.date || '-').slice(5)).join(' ');
+      r.before = dates();
+      P.pageClock.now = day(2026, 10, 9);
+      await a.setPageSize('infinite'); r.infinite = a.store.pages.length;
+      await a.setPageSize('a4', 'portrait'); r.after = dates();
+      r.saved = JSON.stringify(a.store.toJSON().pageDates || null);
+      a.store.undo(); r.undone = a.store.pages.length;
+      a.store.redo();
+    } finally { P.pageClock.now = realNow; }
+    return r;
+  `);
+  check('a pad turned into an infinite canvas and back gets its sheets back, each with the day it was started',
+    nbRound.before === '10-01 10-02 10-03' && nbRound.infinite === 0 && nbRound.after === nbRound.before && nbRound.saved === 'null' && nbRound.undone === 0,
+    `before: ${nbRound.before}; as infinite: ${nbRound.infinite} sheets; back on paper (on 10-09): ${nbRound.after} (wanted the same days); left behind in the file: ${nbRound.saved}; one undo gives infinite again: ${nbRound.undone === 0}`);
 
   // 2: pages added on later days carry their own day
   const nbPages = await js(String.raw`
@@ -7784,6 +7814,45 @@ async function run(win, app) {
     delete a.syncSend; delete a._busyRetryMs; a.toast = was;
     return { okBusy, busyCalls, busyToasts, okAll, sentAll: calls.join('|'), okStuck, stuckCalls, stuckToasts };
   `);
+  const shrunk = await js(String.raw`
+    const a = window.app;
+    // a camera-sized photo, full of detail so it is heavy, and a small drawing
+    const c = document.createElement('canvas'); c.width = 4000; c.height = 3000;
+    const g = c.getContext('2d'), px = g.createImageData(4000, 3000);
+    for (let i = 0; i < px.data.length; i += 4) { px.data[i] = (i * 7) % 251; px.data[i + 1] = (i * 13) % 241; px.data[i + 2] = (i >> 9) % 256; px.data[i + 3] = 255; }
+    g.putImageData(px, 0, 0);
+    const photo = c.toDataURL('image/jpeg', 0.92);
+    const s2 = document.createElement('canvas'); s2.width = 120; s2.height = 80; s2.getContext('2d').fillRect(10, 10, 50, 30);
+    const small = s2.toDataURL('image/png');
+    const img = (id, src) => ({ id, type: 'image', x: 0, y: 0, w: 400, h: 300, rotation: 0, src, assetId: id + '.jpg' });
+    const doc = { name: 'Photos', objects: [img('p1', photo), img('s1', small)], linkedBoards: [{ name: 'Also', objects: [img('p2', photo)] }] };
+    const size = async (src) => { const i = new Image(); i.src = src; await i.decode(); return i.naturalWidth + 'x' + i.naturalHeight; };
+    a.settings.syncFullPictures = false;
+    const out = await a.picturesForSending(doc);
+    const r = {
+      before: Math.round(photo.length / 1024), after: Math.round(out.objects[0].src.length / 1024),
+      dims: await size(out.objects[0].src), jpeg: out.objects[0].src.startsWith('data:image/jpeg'),
+      assetGone: !('assetId' in out.objects[0]), smallSame: out.objects[1].src === small && out.objects[1].assetId === 's1.jpg',
+      linkedShrunk: out.linkedBoards[0].objects[0].src === out.objects[0].src,
+      originalKept: doc.objects[0].src === photo
+    };
+    a.settings.syncFullPictures = true;
+    r.fullSame = (await a.picturesForSending(doc)) === doc;
+    a.settings.syncFullPictures = false;
+    // and what actually goes over the network is the shrunk one
+    let sentSrc = null;
+    a.syncSend = async (peer, d) => { sentSrc = d.objects[0].src; return { ok: true, result: { accepted: true, outcome: 'kept-both' } }; };
+    await a.sendBoardDoc({ deviceId: 'peer-x', name: 'Peer' }, { name: 'One photo', objects: [img('p3', photo)] });
+    delete a.syncSend;
+    r.sentKb = sentSrc ? Math.round(sentSrc.length / 1024) : null;
+    return r;
+  `);
+  check('sending: a camera-sized photo goes over at board size, much lighter, and your own copy keeps the original',
+    shrunk.dims === '2000x1500' && shrunk.jpeg && shrunk.after * 2 < shrunk.before && shrunk.originalKept && shrunk.assetGone && shrunk.sentKb === shrunk.after,
+    `${shrunk.before} KB -> ${shrunk.after} KB at ${shrunk.dims} (wanted 2000x1500, under half), still JPEG: ${shrunk.jpeg}, own copy untouched: ${shrunk.originalKept}, old asset name dropped: ${shrunk.assetGone}, sent: ${shrunk.sentKb} KB`);
+  check('sending: small pictures go as they are, linked boards are shrunk too, and "full size" sends originals',
+    shrunk.smallSame && shrunk.linkedShrunk && shrunk.fullSame,
+    `small picture untouched: ${shrunk.smallSame}; linked board's photo shrunk the same way: ${shrunk.linkedShrunk}; full-size setting leaves the board alone: ${shrunk.fullSame}`);
   check('links: a device still busy with the last board is tried again, not reported as a failure',
     busy.okBusy === true && busy.busyCalls === 3 && !/Could not send/.test(busy.busyToasts),
     `result: ${busy.okBusy}, tries: ${busy.busyCalls} (wanted 3), messages: "${busy.busyToasts}"`);

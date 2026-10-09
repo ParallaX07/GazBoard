@@ -117,8 +117,44 @@ export const DEFAULT_SETTINGS = {
   // in My boards and leaves you where you are, which is what you want when a
   // class is handing work in. Set from the checkbox on the arrival dialog as
   // readily as from Settings - the two are the same switch.
-  syncOpenOnArrival: true
+  syncOpenOnArrival: true,
+  // Pictures go to the other device at board size (no longer than SEND_PICTURE_PX
+  // on their long side) unless this is switched on. See picturesForSending().
+  syncFullPictures: false
 };
+
+/** The longest side a picture is sent at, unless full size is asked for. Sharp on a board even zoomed in. */
+const SEND_PICTURE_PX = 2000;
+
+/**
+ * One picture at sending size: no longer than SEND_PICTURE_PX on its long side,
+ * and re-encoded if it is a very heavy file even at that size. Photos stay
+ * JPEG; anything that may be see-through goes as WebP, which keeps that.
+ * The original comes back unchanged if the new one would not be smaller, or
+ * the picture cannot be read (an SVG, an animation, anything odd).
+ */
+async function shrinkPicture(src) {
+  const m = /^data:(image\/(png|jpeg|jpg|webp));base64,/i.exec(src);
+  if (!m) return src;
+  const heavy = src.length > 1.5 * 1024 * 1024;
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = src;
+  await img.decode();
+  const w = img.naturalWidth, h = img.naturalHeight;
+  if (!w || !h) return src;
+  const k = Math.min(1, SEND_PICTURE_PX / Math.max(w, h));
+  if (k === 1 && !heavy) return src;
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  const jpeg = /jpe?g/i.test(m[2]);
+  const out = c.toDataURL(jpeg ? 'image/jpeg' : 'image/webp', 0.86);
+  // a browser that cannot write WebP hands back PNG, which may well be bigger: then keep the original
+  return out.length < src.length && out.startsWith('data:image/') ? out : src;
+}
 
 /**
  * The file's own name, with its extension and folders taken off, for use as a
@@ -2973,7 +3009,15 @@ class App {
 
     if (paperId === 'infinite' || !paperId) {
       this.rememberCanvas({ paper: 'infinite' });
-      this.store.setPages([], 'infinite canvas');
+      /*
+       * An infinite canvas has no sheets, but the days its sheets were started
+       * are kept: switching to infinite and back to paper must not make a page
+       * begun on Monday say it was begun today.
+       */
+      const dates = this.pages.map((p) => p.date || null);
+      const ops = [this.store.pagesOp([])];
+      if (dates.length) ops.push({ t: 'doc', before: { pageDates: this.store.doc.pageDates }, after: { pageDates: dates } });
+      if (this.pages.length) this.store.commit('infinite canvas', ops);
       this.toast(t('Infinite canvas'));
       this.surface.invalidate();
       this.syncUI();
@@ -2982,13 +3026,17 @@ class App {
 
     const size = pageWorldSize(paperId, orientation);
     if (!size) return;
-    const count = Math.max(1, this.pageCount);
+    // back from an infinite canvas that used to be paper: as many sheets as it had, so nothing is left off them
+    const remembered = !this.pageCount && Array.isArray(this.store.doc.pageDates) ? this.store.doc.pageDates : [];
+    const count = Math.max(1, this.pageCount || remembered.length);
     // a new size, not a new sheet: each page keeps the day it was started, and
     // a canvas that is only now becoming paper starts its first sheet today
     const was = this.pages;
+    // coming back from an infinite canvas: the sheets it had keep their days
+    const kept = remembered;
     const next = Array.from({ length: count }, (_, i) => {
       const p = { ...size };
-      const date = was[i] ? was[i].date : todayStamp();
+      const date = was[i] ? was[i].date : (kept[i] || todayStamp());
       if (date) p.date = date;
       return p;
     });
@@ -2996,6 +3044,7 @@ class App {
     // objects ride their sheet to its new place in the strip
     const ops = [this.store.pagesOp(next)];
     if (this.pageCount) ops.push(...this.relayoutOps(this.pages, next));
+    if (remembered.length) ops.push({ t: 'doc', before: { pageDates: remembered }, after: { pageDates: undefined } });
 
     this.settings.pageOrientation = orientation;
     this.settings.pagePaper = paperId;
@@ -4939,11 +4988,11 @@ class App {
         this.toast(t('Only the first {max} linked boards go along - send the others separately', { max: App.MAX_LINKED }), 'help', 8000);
         others.length = App.MAX_LINKED;
       }
-      const bundle = { ...main, linkedBoards: others };
+      const bundle = await this.picturesForSending({ ...main, linkedBoards: others });
       let bytes = 0;
       try { bytes = JSON.stringify(bundle).length; } catch { bytes = Infinity; }
       if (others.length && bytes <= 60 * 1024 * 1024) {
-        const ok = await this.sendBoardDoc(peer, bundle);
+        const ok = await this.sendBoardDoc(peer, bundle, { shrunk: true });
         if (ok !== true) return false;
         if (/;linked=\d+/.test(this._lastSendOutcome || '')) return true;
         // an older device took the board alone: the linked boards follow one by one
@@ -4971,7 +5020,48 @@ class App {
   syncSend(peer, doc) { return window.board.sync.send(peer, doc); }
 
   /** Send one board, ready to go, and say how it went. */
-  async sendBoardDoc(peer, doc) {
+  /**
+   * The same board, with its pictures - and those of the boards travelling
+   * inside it - made the size a board needs before they cross the network.
+   *
+   * A phone photo is 4000 pixels across and several megabytes; on a board it
+   * is seen a few hundred pixels wide. Sending every one of those pixels made
+   * a handful of linked boards weigh 30 MB, which a phone has to hold several
+   * times over while it unpacks it - and it ran out of memory. Your own copy
+   * is never touched: only what is sent is shrunk.
+   */
+  async picturesForSending(doc) {
+    if (!doc || this.settings.syncFullPictures) return doc;
+    const done = new Map();          // the same picture on several boards is shrunk once
+    const shrink = async (src) => {
+      if (done.has(src)) return done.get(src);
+      const job = shrinkPicture(src).catch(() => src);
+      done.set(src, job);
+      return job;
+    };
+    const fix = async (objects) => {
+      if (!Array.isArray(objects)) return objects;
+      const out = [];
+      for (const o of objects) {
+        if (!o || o.type !== 'image' || typeof o.src !== 'string' || !o.src.startsWith('data:image/')) { out.push(o); continue; }
+        const src = await shrink(o.src);
+        if (src === o.src) { out.push(o); continue; }
+        // a different picture now: the asset name belonged to the full-size one
+        const { assetId, ...rest } = o;
+        out.push({ ...rest, src });
+      }
+      return out;
+    };
+    const next = { ...doc, objects: await fix(doc.objects) };
+    if (Array.isArray(doc.linkedBoards)) {
+      next.linkedBoards = [];
+      for (const d of doc.linkedBoards) next.linkedBoards.push(d && Array.isArray(d.objects) ? { ...d, objects: await fix(d.objects) } : d);
+    }
+    return next;
+  }
+
+  async sendBoardDoc(peer, doc, { shrunk = false } = {}) {
+    if (!shrunk) doc = await this.picturesForSending(doc);
     // Pictures travel inside the board, because the other machine has no copy
     // of this one's assets folder. A board of imported pages can therefore be
     // large, and the far end refuses anything over 64 MB outright.
