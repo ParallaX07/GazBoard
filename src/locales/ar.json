@@ -1015,6 +1015,8 @@
  "This board links to another board": "هذه اللوحة فيها رابط إلى لوحة أخرى",
  "This board links to {n} other boards": "هذه اللوحة فيها روابط إلى {n} لوحات أخرى",
  "Send them along, so the links work on the other computer.": "أرسلها معها، لتعمل الروابط على الكمبيوتر الآخر.",
+ "Send pictures at full size": "إرسال الصور بحجمها الكامل",
+ "Off sends each picture no bigger than a board shows it - 2000 pixels on the long side - so boards arrive quickly and a phone is not swamped. Your own copy always keeps the original. Turn this on only to hand over photos at their original size.": "عند الإيقاف تُرسل كل صورة بالحجم الذي تعرضه اللوحة (2000 بكسل للضلع الأطول)، فتصل اللوحات بسرعة ولا يُثقل الهاتف. نسختك تحتفظ دائمًا بالأصل. فعّل هذا فقط لتسليم الصور بحجمها الأصلي.",
  "A board from {name} arrived but could not be opened here: {error}": "وصلت لوحة من {name} لكن تعذّر فتحها هنا: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "احفظها معها، لتعمل الروابط أينما فُتحت. تُحفظ كلها معًا في ملف ‎.zip‎ واحد.",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "ضعها في ملف PDF بعد هذه اللوحة، والنقر على رابط ينقلك إلى اللوحة التي يسمّيها.",

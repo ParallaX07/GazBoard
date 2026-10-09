@@ -1015,6 +1015,8 @@
  "This board links to another board": "এই বোর্ডে আরেকটা বোর্ডের লিংক আছে",
  "This board links to {n} other boards": "এই বোর্ডে আরও {n}টি বোর্ডের লিংক আছে",
  "Send them along, so the links work on the other computer.": "সেগুলোও সাথে পাঠান, যাতে অন্য কম্পিউটারেও লিংকগুলো কাজ করে।",
+ "Send pictures at full size": "ছবি পুরো সাইজে পাঠান",
+ "Off sends each picture no bigger than a board shows it - 2000 pixels on the long side - so boards arrive quickly and a phone is not swamped. Your own copy always keeps the original. Turn this on only to hand over photos at their original size.": "বন্ধ থাকলে প্রতিটা ছবি বোর্ডে যতটা বড় দেখায় ততটাই পাঠানো হয় (লম্বা দিকে ২০০০ পিক্সেল), তাই বোর্ড তাড়াতাড়ি পৌঁছায় আর ফোনের উপর চাপ পড়ে না। আপনার নিজের কপিতে আসল ছবিই থাকে। শুধু আসল সাইজে ছবি দিতে চাইলে এটা চালু করুন।",
  "A board from {name} arrived but could not be opened here: {error}": "{name} থেকে একটা বোর্ড এসেছে, কিন্তু এখানে খোলা গেল না: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "সেগুলোও সাথে সেভ করুন, যাতে যেখানেই খোলা হোক লিংকগুলো কাজ করে। সবগুলো একটা .zip ফাইলে যাবে।",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "এই বোর্ডের পরে সেগুলো PDF-এ রাখুন, আর কোনো লিংকে ক্লিক করলে সেই বোর্ডে চলে যাবে।",

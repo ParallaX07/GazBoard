@@ -976,6 +976,9 @@ export function createPanels(app) {
           row(t('Sound when a board starts arriving'), mkToggle(() => s.arrivalSound !== false,
             (v) => { s.arrivalSound = v; if (v) app.playArrivalChime(); }),
             t('Two soft notes and a moment of highlight on the top bar the instant a board starts coming in - so the "accept this board?" question is expected rather than a surprise over the sentence you were writing.')),
+          row(t('Send pictures at full size'), mkToggle(() => s.syncFullPictures === true,
+            (v) => { s.syncFullPictures = v; app.saveSettings(); }),
+            t('Off sends each picture no bigger than a board shows it - 2000 pixels on the long side - so boards arrive quickly and a phone is not swamped. Your own copy always keeps the original. Turn this on only to hand over photos at their original size.')),
           row(t('When a board arrives'), mkChoice(
             [[true, t('Open it')], [false, t('Just file it')]],
             () => s.syncOpenOnArrival !== false,

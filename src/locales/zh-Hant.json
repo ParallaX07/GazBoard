@@ -1015,6 +1015,8 @@
  "This board links to another board": "此白板連結到另一個白板",
  "This board links to {n} other boards": "此白板連結到另外 {n} 個白板",
  "Send them along, so the links work on the other computer.": "把它們一起傳送，這樣連結在另一台電腦上也能用。",
+ "Send pictures at full size": "以原始尺寸傳送圖片",
+ "Off sends each picture no bigger than a board shows it - 2000 pixels on the long side - so boards arrive quickly and a phone is not swamped. Your own copy always keeps the original. Turn this on only to hand over photos at their original size.": "關閉時，每張圖片按白板顯示所需的尺寸傳送（長邊 2000 像素），白板到得快，手機也不會不堪負荷。你自己的副本始終保留原圖。只有需要交出原尺寸照片時才開啟。",
  "A board from {name} arrived but could not be opened here: {error}": "來自 {name} 的白板已到達，但無法在這裡開啟：{error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "把它們一起儲存，這樣無論在哪裡開啟，連結都能用。它們會一起放進一個 .zip 檔案。",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "把它們放進 PDF，排在這個白板之後，點擊連結即可跳到它指向的白板。",

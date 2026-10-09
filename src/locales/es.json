@@ -1015,6 +1015,8 @@
  "This board links to another board": "Este tablero enlaza con otro tablero",
  "This board links to {n} other boards": "Este tablero enlaza con otros {n} tableros",
  "Send them along, so the links work on the other computer.": "Envíalos también, para que los enlaces funcionen en el otro equipo.",
+ "Send pictures at full size": "Enviar imágenes a tamaño completo",
+ "Off sends each picture no bigger than a board shows it - 2000 pixels on the long side - so boards arrive quickly and a phone is not swamped. Your own copy always keeps the original. Turn this on only to hand over photos at their original size.": "Desactivado, cada imagen se envía al tamaño que muestra un tablero (2000 píxeles en el lado largo), así los tableros llegan rápido y un teléfono no se satura. Tu propia copia siempre conserva el original. Actívalo solo para entregar fotos en su tamaño original.",
  "A board from {name} arrived but could not be opened here: {error}": "Llegó un tablero de {name}, pero no se pudo abrir aquí: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "Guárdalos con él, para que los enlaces funcionen dondequiera que se abra. Van juntos en un único archivo .zip.",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "Ponlos en el PDF después de este tablero, y un clic en un enlace salta al tablero que nombra.",
