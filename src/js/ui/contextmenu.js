@@ -189,6 +189,12 @@ export function updateSelectionBar(app) {
     bar.appendChild(mk(t('Edit text (F2)'), 'text', () => app.beginTextEdit(sel[0])));
   if (sel.length === 1 && sel[0].type === 'math')
     bar.appendChild(mk(t('Edit maths (F2)'), 'maths', () => app.beginMathEdit(sel[0])));
+  // a card for another board: open it, or point it at a different one
+  if (sel.length === 1 && sel[0].type === 'boardlink') {
+    const card = sel[0];
+    bar.appendChild(mk(t('Open the board'), 'board', () => app.openBoardRef(card.board)));
+    bar.appendChild(mk(t('Link to a different board'), 'link', () => app.relinkBoardCard(card.id)));
+  }
 
   // a table gets its own row and column controls
   if (sel.length === 1 && sel[0].type === 'table') {

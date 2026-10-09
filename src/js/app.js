@@ -3,8 +3,11 @@
 import './platform/platform.js';
 import { t, translatePage, currentLanguage } from './i18n.js';
 import { loadInstalled, onFontsChanged, packFor, isInstalled, download as downloadFontPack, sizeLabel } from './fontpack.js';
-import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf, setConnectorBounds } from './core/store.js';
+import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf, setConnectorBounds, emptyDoc } from './core/store.js';
 import { useConnectorStore, connectorBounds, ROUTES, holds } from './core/connectors.js';
+import { setBoardDirectory, setCurrentBoard, lookupBoard, onDirectoryChange, refLabel, refsAsWords, linkedRefs, allBoards, remapBoardIds } from './core/boardrefs.js';
+import { exportBoards } from './board-export.js';
+import { openBoardPicker } from './ui/boardpicker.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
 import { Interaction } from './core/tools.js';
@@ -15,7 +18,7 @@ import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRe
 import { isNewer } from './core/version.js';
 import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
-import { folderOf, folderPath } from './core/folders.js';
+import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard } from './core/folders.js';
 import { TextEditor } from './ui/textedit.js';
 import { MathEditor } from './ui/mathedit.js';
 import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './core/maths.js';
@@ -24,7 +27,7 @@ import { initPresentBar, syncPresentBar } from './ui/present.js';
 import { ClassTimer } from './ui/timer.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
-import { closePopover, popoverOpen, h } from './ui/popover.js';
+import { closePopover, popoverOpen, openPopover, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS, penById, rememberPen, heldPenId, FONTS } from './ui/palettes.js';
 import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportable } from './export.js';
@@ -157,6 +160,9 @@ class App {
    */
   static SAVE_CEILING = 20000;
 
+  /** The most linked boards that may come along with one board sent over the network. */
+  static MAX_LINKED = 50;
+
   /** How long a dismissed update question stays dismissed. */
   static ASK_AGAIN_AFTER = 7 * 24 * 60 * 60 * 1000;
 
@@ -194,6 +200,14 @@ class App {
     });
     this.panels = createPanels(this);
     this.interaction = new Interaction(this);
+    // Links to other boards show those boards' names and pictures: when the list changes, so do they.
+    this.backStack = [];
+    // Only a board that HAS links needs repainting - a full repaint on every
+    // board switch would cost the pen its first stroke for nothing.
+    onDirectoryChange(() => {
+      if (this.store && linkedRefs(this.store.objects).length) this.surface?.repaintAll?.();
+      this.syncBackPill();
+    });
 
     initToolbar(this);
     // Presenting and the class timer. Neither is part of the board: both
@@ -434,6 +448,8 @@ class App {
      */
     const doc = await this.externaliseAssets(this.store.toJSON());
     await this.mathsReady();
+    // a link to a board made since the list was last read would show as missing in the picture
+    if (linkedRefs(this.store.objects).some((r) => !lookupBoard(r))) await this.refreshBoardDirectory();
     const pic = this.boardPictureFor(force);
     if (pic) doc.thumb = pic;
     await window.board.boards.save({ id: doc.id, json: JSON.stringify(doc) });
@@ -723,6 +739,9 @@ class App {
     this.unsavedNew = true;
     document.getElementById('savedBadge').textContent = t('Saved');
     window.board.boards.setLast(this.store.doc.id);
+    this.syncBackPill();
+    this.syncLinkedFrom();
+    this.refreshBoardDirectory();
     // kept so callers (and the suite) can wait for the board to be on disk
     this.pendingWrite = silent ? Promise.resolve() : this.persist({ force: true });
   }
@@ -741,6 +760,7 @@ class App {
   async deleteBoard(id) {
     const wasOpen = id === this.store.doc.id;
     await window.board.boards.remove(id);
+    this.refreshBoardDirectory();          // links to it now say it is gone
     if (wasOpen) {
       this.textEditor.cancel();
       this.newBoard(true);          // silent: nobody asked for this board
@@ -844,6 +864,11 @@ class App {
     localStorage.setItem('gazboard.lastBoard', this.store.doc.id);
     if (!opts.silent) this.toast(t('Opened {name}', { name: this.store.doc.name }));
     if (!opts.noMigrationPrompt) this.checkStrayContent(data);
+    this.refreshBoardDirectory();
+    this.syncBackPill();
+    // which boards link here: every other board is looked inside, so not while the app is still starting
+    clearTimeout(this._linkedTimer);
+    this._linkedTimer = setTimeout(() => this.syncLinkedFrom(), opts.startup ? 2500 : 250);
   }
 
   /**
@@ -1441,6 +1466,347 @@ class App {
    *  that were showing still showing.
    * ================================================================= */
 
+  /* ================================================================= *
+   *  Links to other boards
+   *
+   *  "@" in words, or on the board, picks another board; following the link
+   *  opens it, and a pill at the top goes back. See core/boardrefs.js.
+   * ================================================================= */
+
+  /** Read the board list again, so links show today's names and pictures. */
+  async refreshBoardDirectory() {
+    let list;
+    try { list = (await window.board.boards.list()) || []; } catch { return; }
+    setBoardDirectory(list);
+  }
+
+  /** Where on the window a board point is - for putting a list beside it. */
+  clientPointOf(wp) {
+    const q = this.surface.cam.toScreen(wp.x, wp.y);
+    const r = this.surface.canvas.getBoundingClientRect();
+    return { x: q.x + r.left, y: q.y + r.top };
+  }
+
+  /**
+   * Choose a board, and put a card for it on this one: where the pointer last
+   * was when it is on the board, in the middle of the view otherwise.
+   */
+  pickBoardLink() {
+    this.textEditor.commit();
+    const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
+    const bp = this.boardPoint;
+    const inView = bp && bp.x >= view.x && bp.x <= view.x + view.w && bp.y >= view.y && bp.y <= view.y + view.h;
+    const at = inView ? { x: bp.x, y: bp.y } : { x: view.x + view.w / 2, y: view.y + view.h / 2 };
+    // opened straight away, so the next key typed lands in its search; the list catches up
+    this.refreshBoardDirectory();
+    const c = this.clientPointOf(at);
+    this.boardPicker = openBoardPicker(this, {
+      at: { x: c.x, y: c.y }, search: true,
+      onPick: async (choice) => {
+        const ref = choice.create ? await this.createLinkedBoard(choice.create) : choice;
+        if (ref) this.addBoardLink(ref, at);
+      }
+    });
+    return this.boardPicker;
+  }
+
+  /** Point a card at a different board, chosen from the same list. */
+  relinkBoardCard(id) {
+    const o = this.store.get(id);
+    if (!o || o.type !== 'boardlink') return null;
+    this.refreshBoardDirectory();
+    const c = this.clientPointOf({ x: o.x + o.w / 2, y: o.y + o.h });
+    this.boardPicker = openBoardPicker(this, {
+      at: c, search: true,
+      onPick: async (choice) => {
+        const ref = choice.create ? await this.createLinkedBoard(choice.create) : choice;
+        if (!ref || !this.store.get(id)) return;
+        const board = { id: ref.id, name: ref.name };
+        if (ref.page > 0) board.page = ref.page;
+        this.store.update(id, { board }, 'link to a board');
+        this.surface.invalidate();
+        this.syncUI();
+      }
+    });
+    return this.boardPicker;
+  }
+
+  /** A card for another board, centred on `at`, selected. */
+  addBoardLink(ref, at = null) {
+    const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
+    const p = at || { x: view.x + view.w / 2, y: view.y + view.h / 2 };
+    const w = this.worldSize(220), hh = this.worldSize(172);
+    const board = { id: ref.id, name: ref.name };
+    if (ref.page > 0) board.page = ref.page;
+    const o = { id: uid('k'), type: 'boardlink', x: p.x - w / 2, y: p.y - hh / 2, w, h: hh, rotation: 0, board };
+    this.store.add(o, 'link to a board');
+    this.setSelection([o.id]);
+    this.showHint('board-link-placed',
+      t('A <b>click</b> with Select, or a tap while presenting, opens the board. <b>Ctrl+click</b> opens it with any tool.'));
+    return o;
+  }
+
+  /**
+   * A new, empty board for a link to point at - made on the side, without
+   * leaving this one, in the same folder as this one.
+   */
+  async createLinkedBoard(name) {
+    const doc = { ...emptyDoc(String(name || '').trim() || t('Untitled board')), objects: [] };
+    delete doc.order;
+    const want = this.settings.rememberCanvas ? this.settings.canvasDefaults : null;
+    if (want) for (const k of ['color', 'pattern', 'patternColor']) if (want[k] != null) doc.background[k] = want[k];
+    if (this.settings.patternSpacing && this.settings.patternSpacing !== 40) doc.background.spacing = this.settings.patternSpacing;
+    try {
+      await window.board.boards.save({ id: doc.id, json: JSON.stringify(doc), setLast: false });
+    } catch {
+      this.toast(t('Could not make the board'));
+      return null;
+    }
+    const folder = folderOf(this.settings, this.store.doc.id);
+    if (folder) { this.settings.boardFolders = { ...(this.settings.boardFolders || {}), [doc.id]: folder }; this.saveSettings(); }
+    await this.refreshBoardDirectory();
+    this.toast(t('Made a new board, “{name}”', { name: doc.name }));
+    return { id: doc.id, name: doc.name, page: 0 };
+  }
+
+  /**
+   * Follow a link. This board is saved first, and remembered, so the pill at
+   * the top can bring you straight back to where you were.
+   */
+  async openBoardRef(ref) {
+    if (!ref) return false;
+    await this.refreshBoardDirectory();
+    const target = lookupBoard(ref);
+    if (!target) { this.toast(t('“{name}” is not on this computer', { name: ref.name || '?' })); return false; }
+    if (target.id === this.store.doc.id) {
+      if (ref.page > 0 && this.pageCount) this.goToPage(ref.page - 1);
+      return true;
+    }
+    this.textEditor.commit();
+    this.mathEditor?.close();
+    const from = { id: this.store.doc.id, name: this.store.doc.name, camera: this.surface.cam.toJSON() };
+    try { await this.persist(); } catch { /* the board stays open: nothing is lost by staying */ }
+    let data = null;
+    try { data = await window.board.boards.load(target.id); } catch { data = null; }
+    if (!data) { this.toast(t('“{name}” is not on this computer', { name: ref.name || '?' })); return false; }
+    this.backStack.push({ ...from, to: target.id });
+    if (this.backStack.length > 30) this.backStack.shift();
+    await this.loadBoard(data, { claimed: true });
+    if (ref.page > 0) requestAnimationFrame(() => { if (this.pageCount) this.goToPage(ref.page - 1); });
+    this.syncBackPill();
+    return true;
+  }
+
+  /** Back to the board a link was followed from, looking where you were looking. */
+  async goBack() {
+    const b = this.backStack.pop();
+    if (!b) { this.syncBackPill(); return false; }
+    this.textEditor.commit();
+    try { await this.persist(); } catch { /* as above */ }
+    let data = null;
+    try { data = await window.board.boards.load(b.id); } catch { data = null; }
+    if (!data) { this.toast(t('“{name}” is not on this computer', { name: b.name || '?' })); this.syncBackPill(); return false; }
+    await this.loadBoard({ ...data, camera: b.camera || data.camera }, { claimed: true, silent: true });
+    this.toast(t('Back to {name}', { name: this.store.doc.name }));
+    this.syncBackPill();
+    return true;
+  }
+
+  /* ---- which boards link here ---- */
+
+  /*
+   * Each board's links, by board, as of the version last read. Finding which
+   * boards point at this one means looking inside every other board, so each
+   * is read once and then only again after it has changed.
+   */
+  async linkIndex() {
+    let list = [];
+    try { list = (await window.board.boards.list()) || []; } catch { return new Map(); }
+    setBoardDirectory(list);
+    const index = this._linkIndex || (this._linkIndex = new Map());
+    const here = new Set(list.map((b) => b.id));
+    for (const id of [...index.keys()]) if (!here.has(id)) index.delete(id);
+    for (const b of list) {
+      const was = index.get(b.id);
+      if (was && was.modified === b.modified) continue;
+      let refs = [];
+      try { const data = await window.board.boards.load(b.id); refs = linkedRefs(data?.objects); } catch { refs = []; }
+      index.set(b.id, { modified: b.modified, refs });
+    }
+    return index;
+  }
+
+  /** The boards with a link to the open one (or to `id`). The open board's own, unsaved links count too. */
+  async boardsLinkingHere(id = this.store.doc.id) {
+    const index = await this.linkIndex();
+    const out = [];
+    for (const b of allBoards()) {
+      if (b.id === id) continue;
+      const refs = b.id === this.store.doc.id ? linkedRefs(this.store.objects) : (index.get(b.id)?.refs || []);
+      if (refs.some((r) => lookupBoard(r)?.id === id)) out.push(b);
+    }
+    return out.sort((p, q) => String(p.name).localeCompare(String(q.name), undefined, { numeric: true, sensitivity: 'base' }));
+  }
+
+  /** The "Linked from N" badge beside the board's name. */
+  async syncLinkedFrom() {
+    const el = document.getElementById('linkedFrom');
+    if (!el) return;
+    const id = this.store.doc.id;
+    const ticket = (this._linkedTicket = (this._linkedTicket || 0) + 1);
+    let from = [];
+    try { from = await this.boardsLinkingHere(id); } catch { from = []; }
+    if (ticket !== this._linkedTicket || id !== this.store.doc.id) return;      // a newer look has started
+    this._linkedFrom = from;
+    el.hidden = !from.length;
+    if (!from.length) return;
+    el.innerHTML = icon('link', 12);
+    el.appendChild(h('span', {}, t('Linked from {n}', { n: from.length })));
+    el.title = t('Boards with a link to this one');
+    if (!el._wired) {
+      el._wired = true;
+      el.addEventListener('click', () => this.showLinkedFrom(el));
+    }
+  }
+
+  showLinkedFrom(anchor) {
+    const from = this._linkedFrom || [];
+    const rows = from.map((b) => {
+      const row = h('div', { class: 'bp-row' },
+        h('div', { class: 'bp-thumb' }, b.thumb ? h('img', { src: b.thumb, alt: '' }) : null),
+        h('div', { class: 'bp-text' }, h('div', { class: 'bp-name' }, b.name || t('Untitled board'))));
+      row.addEventListener('click', () => { closePopover(); this.openBoardRef({ id: b.id, name: b.name }); });
+      return row;
+    });
+    openPopover(anchor, h('div', { class: 'lf-pop' }, h('h4', {}, t('Boards with a link to this one')), ...rows),
+      { key: 'linkedFrom', placement: 'bottom', align: 'start', className: 'bp-popover' });
+  }
+
+  /* ---- sending or saving a board that links to others ---- */
+
+  /**
+   * Every board reachable from `refs` by following links, nearest first,
+   * not counting `except`. Each board is read once, however many links lead to it.
+   */
+  async boardsReachable(refs, except) {
+    const out = [], seen = new Set([except]);
+    let wave = refs;
+    while (wave.length) {
+      const next = [];
+      for (const r of wave) {
+        const b = lookupBoard(r);
+        if (!b || seen.has(b.id)) continue;
+        seen.add(b.id);
+        out.push(b);
+        try { const data = await window.board.boards.load(b.id); next.push(...linkedRefs(data?.objects)); } catch { /* unreadable: its own links are not followed */ }
+      }
+      wave = next;
+    }
+    return out;
+  }
+
+  /**
+   * This board links to others: take them along?
+   *
+   * A link to a board the other person does not have goes nowhere, so before
+   * a board leaves this computer - over the network or as a file - the boards
+   * it links to are offered, ticked. The boards THEY link to can come too.
+   * "Don't ask again" remembers the answer for this board.
+   *
+   * @param {'send'|'save'|'pdf'|'svg'} why
+   * @returns {Promise<string[]|null>} the ids of the other boards to include (none = just this one), or null to stop
+   */
+  async askAboutLinkedBoards(why) {
+    const id = this.store.doc.id;
+    await this.refreshBoardDirectory();
+    const direct = [];
+    for (const r of linkedRefs(this.store.objects)) {
+      const b = lookupBoard(r);
+      if (b && b.id !== id && !direct.some((x) => x.id === b.id)) direct.push(b);
+    }
+    if (!direct.length) return [];
+    const all = await this.boardsReachable(direct, id);
+    const further = all.filter((b) => !direct.some((d) => d.id === b.id));
+    const remembered = this.settings.linkShare?.[id];
+    if (remembered === 'alone') return [];
+    if (remembered === 'include') return direct.map((b) => b.id);
+    if (remembered === 'all') return all.map((b) => b.id);
+
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('overlay');
+      const card = document.getElementById('overlayCard');
+      card.innerHTML = '';
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
+      card.appendChild(h('h3', {}, direct.length === 1 ? t('This board links to another board') : t('This board links to {n} other boards', { n: direct.length })));
+      card.appendChild(h('p', {}, why === 'send'
+        ? t('Send them along, so the links work on the other computer.')
+        : why === 'pdf'
+          ? t('Put them in the PDF after this board, and a click on a link jumps to the board it names.')
+          : why === 'svg'
+            ? t('Put them in the picture under this board, and a click on a link shows the board it names.')
+            : t('Save them with it, so the links work wherever it is opened. They go into one .zip file together.')));
+      const ticks = direct.map((b) => {
+        const box = h('input', { type: 'checkbox', checked: true });
+        card.appendChild(h('label', { class: 'check-row' }, box, h('span', {}, b.name || t('Untitled board'))));
+        return { b, box };
+      });
+      let deep = null;
+      if (further.length) {
+        deep = h('input', { type: 'checkbox' });
+        card.appendChild(h('label', { class: 'check-row', style: 'margin-top:6px' }, deep,
+          h('span', {}, further.length === 1 ? t('Also the 1 board they link to') : t('Also the {n} boards they link to', { n: further.length }))));
+      }
+      const never = h('input', { type: 'checkbox' });
+      card.appendChild(h('label', { class: 'check-row', style: 'margin-top:6px;color:var(--text-2)' }, never, h('span', {}, t("Don't ask again for this board"))));
+      const remember = (v) => {
+        if (!never.checked) return;
+        this.settings.linkShare = { ...(this.settings.linkShare || {}), [id]: v };
+        this.saveSettings();
+      };
+      const row = h('div', { class: 'actions', style: 'flex-wrap:wrap;gap:8px' });
+      row.appendChild(h('button', { class: 'btn', onclick: () => done(null) }, t('Cancel')));
+      row.appendChild(h('button', { class: 'btn', onclick: () => { remember('alone'); done([]); } }, t('Just this board')));
+      row.appendChild(h('button', { class: 'btn primary', onclick: () => {
+        const ids = ticks.filter((x) => x.box.checked).map((x) => x.b.id);
+        const withDeep = !!deep?.checked;
+        if (withDeep) for (const b of further) ids.push(b.id);
+        const allTicked = ticks.every((x) => x.box.checked);
+        remember(withDeep && allTicked ? 'all' : allTicked ? 'include' : ids.length ? 'include' : 'alone');
+        done(ids);
+      } }, t('Include them')));
+      card.appendChild(row);
+      this.showOverlay(() => resolve(null));
+    });
+  }
+
+  /** Save a copy - with the boards it links to, in one .zip, when asked for. */
+  async saveBoardCopy() {
+    const extra = await this.askAboutLinkedBoards('save');
+    if (extra === null) return null;
+    if (!extra.length) return saveBoardFile(this);
+    try { return await exportBoards(this, [this.store.doc.id, ...extra]); }
+    catch (e) { this.toast(e.message || String(e), 'help', 6000); return null; }
+  }
+
+  /** The "Back to ..." pill: there while you are on a board a link brought you to. */
+  syncBackPill() {
+    let el = document.getElementById('backPill');
+    const top = this.backStack?.[this.backStack.length - 1];
+    const show = !!top && top.to === this.store.doc.id;
+    if (!el) {
+      if (!show) return;
+      el = h('button', { id: 'backPill', type: 'button' });
+      el.addEventListener('click', () => this.goBack());
+      (document.getElementById('stage') || document.body).appendChild(el);
+    }
+    if (show) {
+      const name = refLabel({ id: top.id, name: top.name });
+      el.replaceChildren(h('b', { 'aria-hidden': 'true' }, '←'), h('span', {}, t('Back to {name}', { name })));
+      el.title = t('Back to {name}', { name });
+    }
+    el.classList.toggle('show', show);
+  }
+
   /** Drop a cover in the middle of the view, selected, ready to be sized. */
   addCurtain() {
     const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
@@ -1767,6 +2133,8 @@ class App {
       case 'insert.document': pickAndInsertDocument(this); break;
       case 'insert.table': this.addTable(); break;
       case 'insert.curtain': this.addCurtain(); break;
+      case 'insert.boardlink': this.pickBoardLink(); break;
+      case 'board.back': this.goBack(); break;
       case 'curtain.reveal': this.revealSelectedCurtains(); break;
       case 'curtain.coverAll': this.coverAllCurtains(); break;
       case 'view.present': this.presenting ? this.stopPresenting() : this.startPresenting(); break;
@@ -1777,7 +2145,7 @@ class App {
       case 'export.pngSelection': exportPng(this, { scale: 2, selectionOnly: true }); break;
       case 'edit.copyPicture': this.copyAsPicture(); break;
       case 'edit.copyText': this.copyText(); break;
-      case 'export.svg': this.checkOffPageBeforeExport().then((go) => go && exportSvg(this)); break;
+      case 'export.svg': this.exportSvgWithLinks(); break;
       case 'export.pdf': this.exportPdfWithSetup(); break;
       case 'view.fitPage': this.fitToPage(this.currentPageIndex()); break;
       case 'view.fitAllPages': this.fitToAllPages(); break;
@@ -1787,7 +2155,7 @@ class App {
       case 'page.next': this.nextPage(); break;
       case 'page.prev': this.prevPage(); break;
       case 'page.fitContent': this.fitContentToPage(); break;
-      case 'board.save': saveBoardFile(this); break;
+      case 'board.save': this.saveBoardCopy(); break;
       case 'board.open': openBoardFile(this); break;
       case 'board.new':
         this.confirm(t('New board?'), t('Your current board is saved automatically and stays in "My boards".'), t('Create'))
@@ -2035,7 +2403,7 @@ class App {
           const cells = [], cp = [];
           for (let c = 0; c < cols; c++) {
             const key = r + ',' + c, v = o.cells?.[key] || '';
-            cp.push(v.replace(/\n/g, ' '));
+            cp.push(refsAsWords(v).replace(/\n/g, ' '));
             cells.push(`<td>${runsToHtml(objectRuns(o, key), v, {})}</td>`);
           }
           tp.push(cp.join('\t')); tr.push(`<tr>${cells.join('')}</tr>`);
@@ -2051,7 +2419,7 @@ class App {
        */
       const own = o.type === 'note' ? o.textColor : o.type === 'shape' ? o.textColor : o.color;
       const colour = own && own.toLowerCase() !== '#201f1e' ? own : null;
-      plain.push(o.text);
+      plain.push(refsAsWords(o.text));
       html.push(`<p>${runsToHtml(objectRuns(o), o.text, { bold: !!o.bold, italic: !!o.italic, underline: !!o.underline, color: colour })}</p>`);
     }
     return { text: plain.join('\n\n'), html: html.join('') };
@@ -2230,6 +2598,7 @@ class App {
 
   /* ---------------- UI sync ---------------- */
   syncUI() {
+    setCurrentBoard(this.store.doc.id, this.store.doc.name);
     this.syncBoardPath();
     syncToolbar(this);
     syncPresentBar(this);
@@ -2924,9 +3293,20 @@ class App {
     return true;
   }
 
+  /** SVG: the boards this one links to can go in too, under it. */
+  async exportSvgWithLinks() {
+    if (!(await this.checkOffPageBeforeExport())) return null;
+    const linked = await this.askAboutLinkedBoards('svg');
+    if (linked === null) return null;
+    return exportSvg(this, { linked });
+  }
+
   async exportPdfWithSetup() {
     if (!this.store.objects.length) { this.toast(t('Nothing on the board to export')); return null; }
     if (!(await this.checkOffPageBeforeExport())) return null;
+    // the boards this one links to can go in too, after it
+    const linked = await this.askAboutLinkedBoards('pdf');
+    if (linked === null) return null;
     const { choosePageSetup, paperForPage } = await import('./ui/pdfdialog.js');
     const page = this.store.page;
     let box;
@@ -2950,7 +3330,7 @@ class App {
       pdfMode: opts.mode, pdfQuality: opts.quality
     });
     this.saveSettings();
-    return exportPdf(this, opts);
+    return exportPdf(this, { ...opts, linked });
   }
 
   showProgress(title, text) {
@@ -3224,6 +3604,7 @@ class App {
       [t('Edit text of selection'), t('F2 or double-click')], [t('Nudge selection'), t('Arrow keys')],
       [t('Bring to front / Send to back'), 'Ctrl+Shift+] / Ctrl+Shift+['],
       [t('Constrain / square'), t('Hold Shift while drawing')],
+      [t('Link to another board'), t('@ on the board, or in words')], [t('Follow a link with any tool'), 'Ctrl+click'],
       ['h', t('Teaching')],
       [t('Present'), 'F5'], [t('Stop presenting'), 'Esc'],
       [t('Next / previous page while presenting'), t('Page Down / Page Up, or the arrows')],
@@ -3520,21 +3901,9 @@ class App {
     // drag & drop files
     const stage = document.getElementById('stage');
     stage.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-    stage.addEventListener('drop', async (e) => {
+    stage.addEventListener('drop', (e) => {
       e.preventDefault();
-      const files = [...(e.dataTransfer?.files || [])];
-      if (!files.length) return;
-      const at = this.surface.toWorld(e);
-      const paths = files.map((f) => f.path).filter(Boolean);
-      if (paths.length) {
-        const imgs = paths.filter(isImagePath);
-        const docs = paths.filter(isDocPath);
-        if (imgs.length) await insertImagesFromPaths(this, imgs);
-        for (const d of docs) await insertDocument(this, d);
-        if (!imgs.length && !docs.length) this.toast(t('Unsupported file type'));
-      } else {
-        await insertImageFiles(this, files, at);
-      }
+      this.dropFiles([...(e.dataTransfer?.files || [])], this.surface.toWorld(e));
     });
 
     window.addEventListener('resize', () => this.textEditor.reposition());
@@ -3553,6 +3922,37 @@ class App {
     window.addEventListener('beforeunload', () => {
       if (this.settings.autosave) this.persist();
     });
+  }
+
+  /**
+   * Files dropped on the board: pictures where they were dropped, documents
+   * page by page, a board file opened. Anything else is named, never silently
+   * skipped.
+   *
+   * The desktop app reads each file from where it lives on disk. A browser
+   * cannot know that, so the web version takes the pictures it is handed and
+   * points to Add for the rest.
+   */
+  async dropFiles(files, at) {
+    if (!files.length) return;
+    const pathOf = (f) => f.path || window.board.pathForFile?.(f) || '';
+    const paths = files.map(pathOf);
+    const name = (f) => f.name || '?';
+    if (paths.every(Boolean)) {
+      const boardFile = paths.find((p) => /\.(gazboard|openboard)$/i.test(p));
+      const imgs = paths.filter(isImagePath);
+      const docs = paths.filter(isDocPath);
+      const other = files.filter((f, i) => !isImagePath(paths[i]) && !isDocPath(paths[i]) && paths[i] !== boardFile);
+      if (imgs.length) await insertImagesFromPaths(this, imgs, at);
+      for (const d of docs) await insertDocument(this, d);
+      if (boardFile) window.dispatchEvent(new CustomEvent('gazboard:import-file', { detail: boardFile }));
+      if (other.length) this.toast(t('Could not add {names} - drop a picture, a document or a board', { names: other.map(name).join(', ') }), 'help', 6000);
+      return;
+    }
+    const pictures = files.filter((f) => String(f.type || '').startsWith('image/'));
+    const rest = files.filter((f) => !pictures.includes(f));
+    if (pictures.length) await insertImageFiles(this, pictures, at);
+    if (rest.length) this.toast(t('Only pictures can be dropped here - add {names} with Add > Document', { names: rest.map(name).join(', ') }), 'help', 6000);
   }
 
   onKeyDown(e) {
@@ -3687,6 +4087,9 @@ class App {
       }
     }
 
+    // "@" on the board: a link to another board, where the pointer is
+    if (e.key === '@' && !mod) { e.preventDefault(); this.command('insert.boardlink'); return; }
+
     const keyTool = { v: 'select', l: 'lasso', p: 'pen', h: 'highlighter', e: 'eraser', n: 'note', t: 'text', s: 'shape', x: 'laser', g: 'pan' }[e.key.toLowerCase()];
     if (keyTool) { this.setTool(keyTool); return; }
     if (e.key === '?') this.showShortcuts();
@@ -3722,7 +4125,7 @@ class App {
     });
     window.board.sync.onIncoming((msg) => this.queueIncomingBoard(msg));
     if (window.board.sync.onReceiving) {
-      window.board.sync.onReceiving((info) => this.showReceiving(info));
+      window.board.sync.onReceiving((info) => { this._receivingAt = performance.now(); this.showReceiving(info); });
     }
     // Routed through a field rather than wired per send, because listeners
     // registered on a preload bridge cannot be taken off again.
@@ -3785,6 +4188,16 @@ class App {
    */
   queueIncomingBoard(msg) {
     if (!msg || !msg.ticket) return;
+    /*
+     * Android asks again for every question still open when the editor
+     * reloads, so the same board can be offered twice. One ticket, one
+     * question: a second copy would be answered after the first and tell the
+     * person the sender had "stopped waiting" when it had not.
+     */
+    this._tickets = this._tickets || new Set();
+    if (this._tickets.has(msg.ticket)) return;
+    this._tickets.add(msg.ticket);
+    if (this._tickets.size > 500) this._tickets.delete(this._tickets.values().next().value);
     this._incoming.push(msg);
     if (!this._incomingBusy) this.drainIncomingBoards();
   }
@@ -3814,8 +4227,20 @@ class App {
       catch { return false; }
     };
     if (!board || typeof board !== 'object' || !Array.isArray(board.objects)) { reply(null); return; }
-
+    /*
+     * Boards it links to can travel inside it, so one Save takes them all -
+     * rather than one question per board, a dozen taps for a dozen links.
+     */
     const who = (from && from.name) || t('another computer');
+    const sentWith = Array.isArray(board.linkedBoards) ? board.linkedBoards.length : 0;
+    // A sane class of linked boards is a handful; past the cap it is not a lesson, it is a flood.
+    if (sentWith > App.MAX_LINKED) {
+      await reply(null);
+      this.toast(t('Turned down a board from {name}: it came with {n} linked boards, and no more than {max} are taken at once', { name: who, n: sentWith, max: App.MAX_LINKED }), 'help', 8000);
+      return;
+    }
+    const linked = sentWith ? board.linkedBoards.filter((d) => d && typeof d === 'object' && Array.isArray(d.objects)) : [];
+    if ('linkedBoards' in board) { board = { ...board }; delete board.linkedBoards; }
     /*
      * Where this copy came from, in the same slot a file's path goes in. That
      * is deliberate: it makes "the same board sent again" behave exactly like
@@ -3830,7 +4255,9 @@ class App {
     const mine = list.find((b) => b.origin && b.origin === origin)
       || list.find((b) => b.id === board.id) || null;
 
-    const answer = await this.askAboutIncomingBoard({ board, who, mine, waiting: this._incoming.length });
+    // which of the linked boards to keep: all of them, unless some are unticked in the question
+    const keep = new Set(linked.map((_, i) => i));
+    const answer = await this.askAboutIncomingBoard({ board, who, mine, waiting: this._incoming.length, linked, keep });
     if (!answer) {
       await reply(null);
       this.toast(t('Declined the board from {name}', { name: who }), 'help');
@@ -3845,6 +4272,47 @@ class App {
     if (mine && answer === 'replace') data = { ...board, origin, id: mine.id, name: base };
     else if (mine) data = { ...board, origin, id: uid('b'), name: uniqueBoardName(base, list), created: Date.now() };
     else data = { ...board, origin, name: uniqueBoardName(base, list) };
+
+    /*
+     * The boards that came with it are filed the same way: a board sent before
+     * is replaced only if that was the answer (and never the one open right
+     * now), otherwise kept beside the old copy. Any board given a new id here
+     * takes the links pointing at it along, so every link still lands.
+     */
+    const idMap = new Map();
+    if (data.id !== board.id) idMap.set(board.id, data.id);
+    const linkedData = [];
+    const filed = [{ doc: null, have: mine, replaced: !!mine && answer === 'replace' }];   // [0] is the board itself, set below
+    const taken = [...list, { id: data.id, name: data.name }];
+    const dev = (from && from.deviceId) || 'unknown';
+    for (const lb of linked.filter((_, i) => keep.has(i))) {
+      const lo = 'sync:' + dev + '/' + (lb.id || 'board');
+      const have = list.find((b) => b.origin && b.origin === lo) || list.find((b) => b.id === lb.id) || null;
+      const lbase = lb.name && lb.name !== 'Untitled board' ? lb.name : t('Board from {name}', { name: who });
+      let d;
+      if (have && answer === 'replace' && have.id !== this.store.doc.id) d = { ...lb, origin: lo, id: have.id, name: lbase };
+      else if (have) d = { ...lb, origin: lo, id: uid('b'), name: uniqueBoardName(lbase, taken), created: Date.now() };
+      else d = { ...lb, origin: lo, name: uniqueBoardName(lbase, taken) };
+      if (lb.id && d.id !== lb.id) idMap.set(lb.id, d.id);
+      taken.push({ id: d.id, name: d.name });
+      linkedData.push(d);
+      filed.push({ doc: d, have, replaced: !!have && d.id === have.id });
+    }
+    if (idMap.size) {
+      data = { ...data, objects: remapBoardIds(data.objects, idMap) };
+      for (let i = 0; i < linkedData.length; i++) linkedData[i] = { ...linkedData[i], objects: remapBoardIds(linkedData[i].objects, idMap) };
+    }
+    // what each replaced board was, so Undo can put it back
+    const before = new Map();
+    for (const f of filed) {
+      const id = f.doc ? f.doc.id : data.id;
+      if (f.replaced) { try { before.set(id, await window.board.boards.load(id)); } catch { /* nothing to put back */ } }
+    }
+    let linkedSaved = 0;
+    for (let i = 0; i < linkedData.length; i++) {
+      linkedData[i] = filed[i + 1].doc = { ...linkedData[i], objects: linkedData[i].objects };
+      if (await this.saveIncomingBoard(linkedData[i], false)) linkedSaved++;
+    }
 
     /*
      * Replacing the board that is open right now is not a preference - it MUST
@@ -3865,7 +4333,7 @@ class App {
      * past on the way to the fifth, so a backlog files quietly and only the
      * last one lands on screen.
      */
-    const open = replacingWhatIsOpen
+    let open = replacingWhatIsOpen
       || (this.settings.syncOpenOnArrival !== false && this._incoming.length === 0);
 
     const saved = await this.saveIncomingBoard(data, open);
@@ -3874,20 +4342,118 @@ class App {
       this.toast(t('Could not save the board from {name}', { name: who }), 'help', 6000);
       return;
     }
-    const delivered = await reply(answer === 'replace' ? 'replaced' : 'kept-both');
+    filed[0].doc = data;
+    // ";linked=n" tells a sender that knows about it that the linked boards came too (an older one ignores it)
+    const delivered = await reply((answer === 'replace' ? 'replaced' : 'kept-both') + (linked.length ? ';linked=' + linkedSaved : ''));
+    this.fileArrivals(filed, from);
+    if (linkedData.length) this.refreshBoardDirectory();
 
-    if (open) await this.loadBoard(data, { claimed: true, silent: true });
+    /*
+     * Opening it must never hold up the boards queued behind it. Boards arrive
+     * one question at a time, and a board that takes for ever to open (or
+     * never does) used to leave every later arrival waiting unseen: the other
+     * computer said "waiting for an answer" while this one had nothing on
+     * screen to answer. It is already saved; the queue moves on regardless.
+     */
+    /*
+     * Boards sent together come one after another: the sender waits for each
+     * answer before sending the next. So "nothing else is waiting" is not yet
+     * known when the first one is accepted - and opening each in turn yanked
+     * the screen away three times, burying the next question under the board
+     * just opened. Wait a moment: if another board knocks, this one is filed
+     * and only the last of them opens.
+     */
+    if (open && !replacingWhatIsOpen) {
+      const since = performance.now(), until = since + (this._nextBoardWaitMs ?? 2500);
+      const another = () => this._incoming.length > 0 || (this._receivingAt || 0) > since;
+      while (performance.now() < until && !another()) await new Promise((res) => setTimeout(res, 100));
+      if (another()) open = false;
+    }
+    if (open) {
+      await Promise.race([
+        this.loadBoard(data, { claimed: true, silent: true }).catch(() => {}),
+        new Promise((res) => setTimeout(res, this._openWaitMs ?? 15000))
+      ]);
+    }
     // The board is safely here either way. Whether the sender ever heard about
     // it is a separate fact, and worth saying: their screen will say declined.
+    // Everything just filed can be taken back in one go: new boards removed, replaced ones put back.
+    const undo = { label: t('Undo'), onClick: () => this.undoArrivals(filed, before, who) };
+    const count = filed.length;
     if (!delivered) {
-      this.toast(t('Kept “{board}”, but {name} had already stopped waiting - their screen will say it was declined', { board: data.name, name: who }), 'help', 8000);
+      this.toast(t('Kept “{board}”, but {name} had already stopped waiting - their screen will say it was declined', { board: data.name, name: who }), 'help', 10000, undo);
     } else if (replacingWhatIsOpen) {
-      this.toast(t('“{board}” has been replaced with the copy from {name}', { board: data.name, name: who }), 'board', 5000);
+      this.toast(t('“{board}” has been replaced with the copy from {name}', { board: data.name, name: who }), 'board', 10000, undo);
+    } else if (count > 1) {
+      this.toast(open
+        ? t('Opened “{board}” and saved {n} boards from {name}', { board: data.name, n: count, name: who })
+        : t('Saved {n} boards from {name} - in My boards', { n: count, name: who }), 'board', 10000, undo);
     } else {
       this.toast(open
         ? t('Opened “{board}” from {name}', { board: data.name, name: who })
-        : t('Saved “{board}” - open it from Boards', { board: data.name }), 'board', 5000);
+        : t('Saved “{board}” - open it from Boards', { board: data.name }), 'board', 10000, undo);
     }
+  }
+
+  /**
+   * The folder boards from one device are filed in: "From <its name>". One per
+   * device, kept by the device's id, so renaming the device renames the folder
+   * rather than starting another.
+   */
+  deviceFolder(from) {
+    const s = this.settings;
+    const dev = (from && from.deviceId) || 'unknown';
+    const name = t('From {name}', { name: (from && from.name) || t('another computer') });
+    const map = s.deviceFolders && typeof s.deviceFolders === 'object' ? s.deviceFolders : {};
+    let id = map[dev];
+    const f = id && folderList(s).find((x) => x.id === id);
+    if (!f) { id = createFolder(s, name); s.deviceFolders = { ...map, [dev]: id }; }
+    else if (f.name !== name) renameFolder(s, id, name);
+    return id;
+  }
+
+  /*
+   * Where arrivals are filed. A board that replaced one already here stays
+   * wherever that one was; a second copy goes beside the first; anything new
+   * goes in the sender's own folder, so a class sending in work never mixes
+   * into the teacher's boards.
+   */
+  fileArrivals(filed, from) {
+    const s = this.settings;
+    let folder = null;
+    for (const f of filed) {
+      if (!f.doc || f.replaced) continue;
+      const beside = f.have ? folderOf(s, f.have.id) : null;
+      moveBoard(s, f.doc.id, beside || (folder = folder || this.deviceFolder(from)));
+    }
+    this.saveSettings();
+    this.panels?.boardsChanged?.();
+  }
+
+  /** Take back what one arrival filed: new boards removed, replaced boards put back as they were. */
+  async undoArrivals(filed, before, who) {
+    let n = 0;
+    for (const f of filed) {
+      if (!f.doc) continue;
+      const id = f.doc.id;
+      const old = before.get(id);
+      try {
+        if (f.replaced && old) {
+          await window.board.boards.save({ id, json: JSON.stringify(old), setLast: false });
+          if (this.store.doc.id === id) await this.loadBoard(old, { claimed: true, silent: true });
+        } else if (!f.replaced) {
+          if (this.store.doc.id === id) await this.deleteBoard(id);
+          else await window.board.boards.remove(id);
+          moveBoard(this.settings, id, null);
+        }
+        n++;
+      } catch { /* the rest still go */ }
+    }
+    this.saveSettings();
+    this.refreshBoardDirectory();
+    this.panels?.boardsChanged?.();
+    this.toast(t('Took back what came from {name}', { name: who }), 'check');
+    return n;
   }
 
   /**
@@ -3924,18 +4490,44 @@ class App {
    *
    * @returns {Promise<'open'|'save'|'both'|'replace'|null>} null means decline
    */
-  askAboutIncomingBoard({ board, who, mine, waiting }) {
-    return new Promise((resolve) => {
+  askAboutIncomingBoard(args) {
+    const { board, who, mine, waiting, linked = [], keep = new Set() } = args;
+    return new Promise((outer) => {
       const overlay = document.getElementById('overlay');
       const card = document.getElementById('overlayCard');
       card.innerHTML = '';
+      /*
+       * The question must not be lost under another dialog.
+       *
+       * Every dialog shares one card. If something else opens while this
+       * question is up - an update notice, a prompt from the board just
+       * opened - it takes the card, this question's buttons are gone, and the
+       * sender waits five minutes for an answer that can never be given while
+       * every board behind it queues up unseen. So the question keeps an eye
+       * on its card, and once the other dialog is finished, asks again.
+       */
+      let settled = false;
+      const resolve = (v) => { if (settled) return; settled = true; clearInterval(watch); outer(v); };
       const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
+      const watch = setInterval(() => {
+        if (settled) { clearInterval(watch); return; }
+        const ours = card.contains(heading);
+        const up = overlay.classList.contains('show');
+        if (ours && up) return;
+        if (!up) {
+          // our question is no longer on screen and nothing else is: put it back
+          clearInterval(watch);
+          settled = true;
+          this.askAboutIncomingBoard(args).then(outer);
+        }
+      }, 400);
 
       const count = Array.isArray(board.objects) ? board.objects.length : 0;
       let kb = 0;
       try { kb = Math.max(1, Math.round(JSON.stringify(board).length / 1024)); } catch { kb = 0; }
 
-      card.appendChild(h('h3', {}, t('{name} is sending you a board', { name: who })));
+      const heading = h('h3', {}, t('{name} is sending you a board', { name: who }));
+      card.appendChild(heading);
       card.appendChild(h('div', { style: 'display:flex;gap:14px;align-items:flex-start;margin:0 0 12px' },
         boardThumb(board.objects, 168, 106),
         h('div', { style: 'font-size:13px;line-height:1.7;min-width:0;flex:1' },
@@ -3949,6 +4541,51 @@ class App {
               waiting === 1 ? t('One more is waiting behind this') : t('{n} more are waiting behind this', { n: waiting }))
             : null)));
 
+      /*
+       * The boards that come with it, each shown before anything is kept.
+       *
+       * One Save takes them all - but not unseen: a board tucked in among the
+       * links is a picture here like the board itself, and any of them can be
+       * unticked. A tap on a picture shows it larger, in place, so the
+       * question never has to make way for a second window.
+       */
+      if (linked.length) {
+        const note = h('div', { class: 'linked-note' });
+        const head = h('div', { class: 'ln-head' });
+        const count = h('span', { class: 'ln-count' });
+        const all = h('button', { class: 'ln-all', type: 'button' });
+        const grid = h('div', { class: 'ln-grid' });
+        const view = h('div', { class: 'ln-view', hidden: true });
+        const recount = () => {
+          count.textContent = keep.size === linked.length
+            ? (linked.length === 1 ? t('It comes with 1 board it links to') : t('It comes with {n} boards it links to', { n: linked.length }))
+            : t('{n} of {total} linked boards will be saved', { n: keep.size, total: linked.length });
+          all.textContent = keep.size === linked.length ? t('Untick all') : t('Tick all');
+        };
+        all.addEventListener('click', () => {
+          const on = keep.size !== linked.length;
+          linked.forEach((_, i) => (on ? keep.add(i) : keep.delete(i)));
+          grid.querySelectorAll('input').forEach((x) => { x.checked = on; });
+          recount();
+        });
+        linked.forEach((d, i) => {
+          const tick = h('input', { type: 'checkbox', checked: true, 'aria-label': d.name || t('Untitled board') });
+          tick.addEventListener('change', () => { tick.checked ? keep.add(i) : keep.delete(i); recount(); });
+          const pic = h('button', { class: 'ln-pic', type: 'button', title: t('Look at it larger') }, boardThumb(d.objects, 112, 70));
+          pic.addEventListener('click', () => {
+            view.replaceChildren(
+              h('button', { class: 'ln-back', type: 'button', onclick: () => { view.hidden = true; grid.hidden = false; } }, '‹ ' + t('All linked boards')),
+              h('div', { class: 'ln-big' }, boardThumb(d.objects, 340, 200)),
+              h('div', { class: 'ln-name' }, (d.name || t('Untitled board')) + ' · ' + t('{n} items', { n: (d.objects || []).length })));
+            grid.hidden = true; view.hidden = false;
+          });
+          grid.appendChild(h('label', { class: 'ln-tile' }, pic, h('span', { class: 'ln-row' }, tick, h('span', { class: 'ln-tname' }, d.name || t('Untitled board')))));
+        });
+        head.append(count, all);
+        note.append(head, grid, view, h('div', { class: 'ln-hint' }, t('Saving keeps the ticked ones - no need to answer for each one.')));
+        recount();
+        card.appendChild(note);
+      }
       card.appendChild(h('p', {}, mine
         ? t('You already have “{name}”, which came from this same board. Keeping both leaves your copy untouched and files this one beside it. Replacing writes this over your copy, and anything you have added to yours since would be gone.', { name: mine.name })
         : t('Nothing is written until you choose.')));
@@ -4241,11 +4878,13 @@ class App {
       t('You can close this — it carries on, and the answer will appear as a message.'));
     card.appendChild(note);
     let closed = false;
+    let nudge = null;
     const close = () => {
       if (closed) return;
       closed = true;
-      this._overlayDismiss = null;
-      overlay.classList.remove('show');
+      clearTimeout(nudge);
+      // only put the dialog away if it is still ours - not a question that has since taken the card
+      if (card.contains(label)) { this._overlayDismiss = null; overlay.classList.remove('show'); }
     };
     card.appendChild(h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: close }, t('Close'))));
@@ -4253,6 +4892,14 @@ class App {
     return {
       update: (sent, total) => {
         if (closed) return;
+        // Everything is out but nobody has answered: say where the question is waiting.
+        if (sent >= total && !nudge) {
+          nudge = setTimeout(() => {
+            if (closed) return;
+            note.textContent = t('Still waiting. The question is on {name}\'s screen - GazBoard has to be open there to answer it.', { name: who });
+            note.style.color = 'var(--text)';
+          }, 20000);
+        }
         const frac = total ? clamp(sent / total, 0, 1) : 0;
         bar.firstChild.style.width = Math.round(frac * 100) + '%';
         label.textContent = sent >= total
@@ -4267,10 +4914,60 @@ class App {
   /** Hand the board that is open right now to a paired device. */
   async sendCurrentBoardTo(peer) {
     if (!peer || !peer.deviceId) return false;
+    const extra = await this.askAboutLinkedBoards('send');
+    if (extra === null) return false;
+    /*
+     * The boards it links to go INSIDE it, so the other side answers once.
+     * A device on an older version saves only the board itself and says
+     * nothing about the rest - then they follow one at a time, as before. So
+     * does a bundle too big for one transfer.
+     */
+    if (extra.length) {
+      let main = null;
+      try { main = exportable(this.store.toJSON({ app: 'GazBoard', version: 1 })); }
+      catch { this.toast(t('Could not read this board to send it'), 'help', 6000); return false; }
+      const others = [];
+      for (const id of extra) {
+        try { const d = await window.board.boards.load(id); if (d) others.push(exportable(await this.resolveAssets(d))); } catch { /* unreadable: left out */ }
+      }
+      // the other side takes no more than this many at once; the rest are left for another send
+      if (others.length > App.MAX_LINKED) {
+        this.toast(t('Only the first {max} linked boards go along - send the others separately', { max: App.MAX_LINKED }), 'help', 8000);
+        others.length = App.MAX_LINKED;
+      }
+      const bundle = { ...main, linkedBoards: others };
+      let bytes = 0;
+      try { bytes = JSON.stringify(bundle).length; } catch { bytes = Infinity; }
+      if (others.length && bytes <= 60 * 1024 * 1024) {
+        const ok = await this.sendBoardDoc(peer, bundle);
+        if (ok !== true) return false;
+        if (/;linked=\d+/.test(this._lastSendOutcome || '')) return true;
+        // an older device took the board alone: the linked boards follow one by one
+        for (const d of others) { if ((await this.sendBoardDoc(peer, d)) === false) return false; }
+        return true;
+      }
+    }
+    // one at a time: the boards it links to first, so this one arrives last - and is the one that opens
+    for (const id of extra) {
+      let other = null;
+      try { other = await window.board.boards.load(id); if (other) other = exportable(await this.resolveAssets(other)); } catch { other = null; }
+      if (!other) continue;
+      // one board turned down is that board's business; the rest still go
+      const ok = await this.sendBoardDoc(peer, other);
+      if (ok === false) return false;
+    }
     let doc;
     try { doc = exportable(this.store.toJSON({ app: 'GazBoard', version: 1 })); }
     catch { this.toast(t('Could not read this board to send it'), 'help', 6000); return false; }
 
+    return (await this.sendBoardDoc(peer, doc)) === true;
+  }
+
+  /** The one call that puts a board on the wire. */
+  syncSend(peer, doc) { return window.board.sync.send(peer, doc); }
+
+  /** Send one board, ready to go, and say how it went. */
+  async sendBoardDoc(peer, doc) {
     // Pictures travel inside the board, because the other machine has no copy
     // of this one's assets folder. A board of imported pages can therefore be
     // large, and the far end refuses anything over 64 MB outright.
@@ -4296,8 +4993,25 @@ class App {
     const sending = this.showSendProgress(peer.name, doc.name || t('board'), bytes);
     this._onSendBytes = ({ sent, total }) => sending.update(sent, total);
 
+    /*
+     * "Receiving another board; try again shortly" is the other device still
+     * finishing the board before this one - it takes one at a time. Sending a
+     * board with the boards it links to sends several back to back, and the
+     * next one can knock while the last is still being put away. That is a
+     * wait, not a failure: try again for a while before saying so. A
+     * phone on an older version takes one board at a time until its question
+     * is answered, so in a classroom the wait can be a minute.
+     */
     let r = null;
-    try { r = await window.board.sync.send(peer, doc); } catch (e) { r = { ok: false, error: e.message }; }
+    this._lastSendOutcome = '';
+    const giveUpAt = Date.now() + (this._busyRetryForMs ?? 90000);
+    for (;;) {
+      try { r = await this.syncSend(peer, doc); } catch (e) { r = { ok: false, error: e.message }; }
+      if (r && r.ok) break;
+      if (!/try again shortly|receiving another board/i.test(String(r && r.error))) break;
+      if (Date.now() >= giveUpAt) break;
+      await new Promise((res) => setTimeout(res, this._busyRetryMs ?? 2000));
+    }
     this._onSendBytes = null;
     sending.close();
     if (!r || !r.ok) {
@@ -4306,11 +5020,18 @@ class App {
     }
     if (!r.result || !r.result.accepted) {
       this.toast(t('{name} declined it', { name: peer.name }), 'help');
-      return false;
+      return 'declined';
     }
-    this.toast(r.result.outcome === 'replaced'
-      ? t('{name} accepted it, replacing their copy', { name: peer.name })
-      : t('{name} accepted it', { name: peer.name }));
+    const outcome = String(r.result.outcome || '');
+    this._lastSendOutcome = outcome;
+    const came = Number((/;linked=(\d+)/.exec(outcome) || [])[1] || 0);
+    this.toast(came
+      ? (outcome.startsWith('replaced')
+        ? t('{name} accepted it with {n} linked boards, replacing their copy', { name: peer.name, n: came })
+        : t('{name} accepted it with {n} linked boards', { name: peer.name, n: came }))
+      : outcome.startsWith('replaced')
+        ? t('{name} accepted it, replacing their copy', { name: peer.name })
+        : t('{name} accepted it', { name: peer.name }));
     return true;
   }
 }

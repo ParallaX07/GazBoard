@@ -31,6 +31,10 @@ class LanNode(
     const val TRANSFER_PORT = 53318
     const val DISCOVERY_PORT = 53319
     const val MAX_BOARD_BYTES = 64 * 1024 * 1024
+    /** All the boards waiting for an answer at once, together. Past this a sender is asked to try again shortly. */
+    const val MAX_WAITING_BYTES = 96L * 1024 * 1024
+    /** How many senders can be waiting for an answer at once - a full classroom, with room to spare. */
+    const val MAX_SENDERS = 48
     private val ID = Regex("[A-Za-z0-9_-]{1,128}")
     fun addresses(): List<JsonObject> = runCatching {
       NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
@@ -49,7 +53,15 @@ class LanNode(
   private var workers: ThreadPoolExecutor? = null
   private val sockets = ConcurrentHashMap.newKeySet<Socket>()
   private val peers = ConcurrentHashMap<String, JsonObject>()
-  private val boardSlot = Semaphore(1)
+  /*
+   * A board's bytes are held from the moment it starts arriving until the
+   * question about it is answered. Boards used to be taken one at a time, and
+   * "one" lasted until that answer: while the first question was on screen
+   * every other sender in the room was turned away. Now they all come in and
+   * wait in line for their question, the way the desktop does it; only their
+   * total size is limited, so a flood cannot run the phone out of memory.
+   */
+  private val waitingBytes = java.util.concurrent.atomic.AtomicLong(0)
   private val pairingLock = Any()
   private data class Room(val code: String, val expires: Long, val remember: Boolean,
     val attempts: MutableMap<String, Int> = mutableMapOf(), val failures: MutableList<Long> = mutableListOf())
@@ -84,8 +96,9 @@ class LanNode(
     if (server == null) server = listener
     port = server!!.localPort
     running = true
-    workers = ThreadPoolExecutor(8, 8, 30, TimeUnit.SECONDS, ArrayBlockingQueue(16),
-      { r -> Thread(r, "GazBoard transfer").apply { isDaemon = true } })
+    // Each sender waiting for an answer keeps its connection, and a thread, until the answer is given.
+    workers = ThreadPoolExecutor(MAX_SENDERS, MAX_SENDERS, 30, TimeUnit.SECONDS, ArrayBlockingQueue(16),
+      { r -> Thread(r, "GazBoard transfer").apply { isDaemon = true } }).apply { allowCoreThreadTimeOut(true) }
     daemon("GazBoard listener") {
       while (running) {
         val socket = try { server?.accept() ?: break } catch (_: Exception) { break }
@@ -190,7 +203,7 @@ class LanNode(
   }
 
   private fun handle(socket: Socket) {
-    var ownsBoardSlot = false
+    var holding = 0L
     socket.use {
       try {
         socket.soTimeout = 30_000
@@ -212,8 +225,9 @@ class LanNode(
         val limit = if (path == "/send") MAX_BOARD_BYTES else if (path.startsWith("/pair/")) 8192 else 65536
         if (head.length > limit) { LocalHttp.reply(socket, 413, json("error" to "board is too large")); return }
         if (path == "/send") {
-          ownsBoardSlot = boardSlot.tryAcquire()
-          if (!ownsBoardSlot) { LocalHttp.reply(socket, 503, json("error" to "Receiving another board; try again shortly")); return }
+          val size = head.length.toLong().coerceAtLeast(1)
+          if (!reserve(size)) { LocalHttp.reply(socket, 503, json("error" to "Receiving another board; try again shortly")); return }
+          holding = size
         }
         val transferId = Protocol.deviceId()
         val known = claimed?.let(paired::get)
@@ -234,10 +248,20 @@ class LanNode(
         runCatching { LocalHttp.reply(socket, 400, json("error" to "bad request")) }
       } finally {
         sockets.remove(socket)
-        if (ownsBoardSlot) boardSlot.release()
+        if (holding > 0) waitingBytes.addAndGet(-holding)
       }
     }
   }
+  /** Room for a board of this size among those already waiting? A board on its own always fits. */
+  private fun reserve(size: Long): Boolean {
+    while (true) {
+      val now = waitingBytes.get()
+      if (now > 0 && now + size > MAX_WAITING_BYTES) return false
+      if (waitingBytes.compareAndSet(now, now + size)) return true
+    }
+  }
+  /** Bytes held by boards arriving or waiting for an answer right now. For the tests. */
+  internal fun waitingBytes(): Long = waitingBytes.get()
   private fun hello(body: JsonObject): LocalHttp.Reply = synchronized(pairingLock) {
     val current = room
     if (current == null || current.expires < System.currentTimeMillis()) return@synchronized failure(409, "pairing is not open")

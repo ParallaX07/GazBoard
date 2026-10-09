@@ -4,9 +4,10 @@ import { boundsOf, worldBounds } from './store.js';
 import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
-import { objectRuns, layoutRich, fitRichSize, drawRichLines } from './richtext.js';
+import { objectRuns, layoutRich, fitRichSize, drawRichLines, needsRich, watchChips } from './richtext.js';
 import { mathEntry, hasMaths } from './maths.js';
 import { drawConnector } from './connectors.js';
+import { lookupBoard, refLabel, refMissing } from './boardrefs.js';
 
 import { fontStack } from '../ui/palettes.js';
 import { t, currentLanguage, direction } from '../i18n.js';
@@ -625,14 +626,14 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
    * formatted - takes exactly the path below that it always has.
    */
   // Maths in the words ($...$) is drawn by the rich path too, which knows how to set it.
-  const runs = opt.runs || (hasMaths(text) ? [{ t: text }] : null);
+  const runs = opt.runs || (needsRich(text) ? [{ t: text }] : null);
   if (runs) {
     const base = { family, weight: '400', bold: weight === '600', italic: !!opt.italic, underline: !!opt.underline, color: opt.color, size: opt.size,
       onload: opt.onload, lineHeight: opt.lineHeight };
     if (!base.size) base.size = fitRichSize(ctx, runs, w, h, base, opt.maxSize || 72, opt.minSize || 10);
     const lines = layoutRich(ctx, runs, w, base);
     drawRichLines(ctx, lines, x, y, w, h, base, { align: opt.align, valign: opt.valign, lineHeight: opt.lineHeight, // plain words with maths in them keep the colours the plain path gives them
-      paint: opt.paint || (opt.runs || opt.ownInk ? undefined : (c) => inkPaint(c)), onload: opt.onload });
+      paint: opt.paint || (opt.runs || opt.ownInk ? undefined : (c) => inkPaint(c)), onload: opt.onload, paper: !!opt.ownInk });
     return;
   }
   const italic = opt.italic ? 'italic ' : '';
@@ -1084,8 +1085,135 @@ export function drawObject(ctx, o, onload, editing = null) {
     case 'table': drawTable(ctx, o, hideCell); break;
     case 'curtain': drawCurtain(ctx, o); break;
     case 'connector': drawConnector(ctx, o, (c) => inkPaint(c)); break;
+    case 'boardlink': drawBoardLink(ctx, o, onload); break;
   }
   ctx.restore();
+}
+
+/* =================================================================== *
+ *  Links to other boards
+ * =================================================================== */
+/*
+ * A card for another board: its picture, and its name underneath, the way My
+ * boards shows it. The picture is the one My boards keeps, so it is as fresh
+ * as the last time that board was saved. A board that is not on this computer
+ * gets a grey, dashed card that still says what it was.
+ */
+export function drawBoardLink(ctx, o, onload) {
+  const ref = o.board || {};
+  const b = lookupBoard(ref);
+  const missing = refMissing(ref);
+  const dark = darkBoard;
+  const { x, y, w, h } = o;
+  const r = Math.min(12, w * 0.06, h * 0.06);
+  const pad = Math.max(4, Math.min(w, h) * 0.04);
+  const labelH = Math.max(18, Math.min(h * 0.24, 44));
+  ctx.save();
+  // the card
+  ctx.shadowColor = 'rgba(0,0,0,0.16)';
+  ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = dark ? '#2d2c2b' : '#ffffff';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = missing ? (dark ? '#605e5c' : '#a19f9d') : (dark ? '#4a6f94' : '#9cc3e8');
+  if (missing) ctx.setLineDash([6, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // the picture
+  const px = x + pad, py = y + pad, pw = Math.max(1, w - pad * 2), ph = Math.max(1, h - pad * 2 - labelH);
+  ctx.save();
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(px, py, pw, ph, Math.max(2, r - pad / 2)); else ctx.rect(px, py, pw, ph);
+  ctx.clip();
+  ctx.fillStyle = missing ? (dark ? '#3b3a39' : '#edebe9') : '#f3f2f1';
+  ctx.fillRect(px, py, pw, ph);
+  const img = !missing && b && b.thumb ? getImage(b.thumb, onload) : null;
+  if (img) {
+    // fill the frame, cropping what does not fit, as the gallery does
+    const k = Math.max(pw / img.width, ph / img.height);
+    const dw = img.width * k, dh = img.height * k;
+    ctx.drawImage(img, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
+  } else {
+    ctx.fillStyle = missing ? (dark ? '#a19f9d' : '#8a8886') : '#a19f9d';
+    const fs = Math.max(8, Math.min(ph * 0.14, pw * 0.07));
+    ctx.font = `400 ${fs}px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(missing ? t('Not on this computer') : t('No picture yet'), px + pw / 2, py + ph / 2, pw - 8);
+  }
+  ctx.restore();
+  // a hairline round the picture, so a white page still reads as a page
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(px + 0.5, py + 0.5, pw - 1, ph - 1, Math.max(2, r - pad / 2)); else ctx.rect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.stroke();
+  // the name, with a little arrow saying it goes somewhere
+  const fs = Math.max(8, labelH * 0.46);
+  const ly = y + h - pad - labelH / 2;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const ink = missing ? (dark ? '#a19f9d' : '#8a8886') : (dark ? '#8ccbff' : '#0f6cbd');
+  ctx.fillStyle = ink; ctx.strokeStyle = ink;
+  // the arrow: a short stroke up and to the right, with its head
+  const ax = x + pad + fs * 0.15, ay = ly, as = fs * 0.62;
+  ctx.lineWidth = Math.max(1, fs / 9); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(ax, ay + as / 2); ctx.lineTo(ax + as, ay - as / 2);
+  ctx.moveTo(ax + as * 0.35, ay - as / 2); ctx.lineTo(ax + as, ay - as / 2); ctx.lineTo(ax + as, ay + as * 0.15);
+  ctx.stroke();
+  ctx.font = `600 ${fs}px ${FONT}`;
+  const tx = ax + as + fs * 0.45, room = x + w - pad - tx;
+  let label = refLabel(ref);
+  if (ctx.measureText(label).width > room) {
+    while (label.length > 1 && ctx.measureText(label + '…').width > room) label = label.slice(0, -1);
+    label += '…';
+  }
+  ctx.fillText(label, tx, ly);
+  if (missing) ctx.fillRect(tx, ly, Math.min(room, ctx.measureText(label).width), Math.max(1, fs / 14));
+  ctx.restore();
+}
+
+/*
+ * Where an object's links are on the board, as four corners each.
+ *
+ * A card is a link all over. Links inside words have no object of their own,
+ * so the words are laid out again - on a scrap of canvas nobody sees, at the
+ * board's own scale - and the pills are noted as they are drawn. That is the
+ * same code that draws them for real, so a link is found exactly where it is
+ * seen, whatever the box's size, wrapping, alignment or turn.
+ */
+let probe = null;
+export function linkRectsOf(o) {
+  if (!o || o.hidden) return [];
+  if (o.type === 'boardlink') {
+    const b = boundsOf(o);
+    const c = { x: b.x + b.w / 2, y: b.y + b.h / 2 }, a = o.rotation || 0;
+    const turn = (px, py) => (a ? { x: c.x + (px - c.x) * Math.cos(a) - (py - c.y) * Math.sin(a), y: c.y + (px - c.x) * Math.sin(a) + (py - c.y) * Math.cos(a) } : { x: px, y: py });
+    return [{ ref: o.board, quad: [turn(b.x, b.y), turn(b.x + b.w, b.y), turn(b.x + b.w, b.y + b.h), turn(b.x, b.y + b.h)] }];
+  }
+  const has = (v) => typeof v === 'string' && v.includes('](b:');
+  if (!has(o.text) && !(o.cells && Object.values(o.cells).some(has))) return [];
+  if (typeof document === 'undefined') return [];
+  probe = probe || document.createElement('canvas').getContext('2d');
+  probe.setTransform(1, 0, 0, 1, 0, 0);
+  const list = [];
+  watchChips(list);
+  try { drawObject(probe, o, null, null); } finally { watchChips(null); }
+  return list;
+}
+
+/** Is world point p inside a four-cornered shape? */
+export function inQuad(q, p) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = q[i], b = q[(i + 1) % 4];
+    const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    if (cross !== 0) { const s = Math.sign(cross); if (sign && s !== sign) return false; sign = s; }
+  }
+  return true;
 }
 
 /* =================================================================== *

@@ -1,5 +1,5 @@
 'use strict';
-const { contextBridge, ipcRenderer, clipboard, nativeImage } = require('electron');
+const { contextBridge, ipcRenderer, clipboard, nativeImage, webUtils } = require('electron');
 const crypto = require('node:crypto');
 
 /**
@@ -172,6 +172,13 @@ contextBridge.exposeInMainWorld('board', {
   // On the desktop the path names the file already; the web build has to work
   // one out from the File itself. See claimLocalBoard().
   fileOrigin: (p) => p,
+  /*
+   * Where a dropped file lives on disk. Electron took File.path away in
+   * version 32, so a file dragged in from Explorer or Finder only says where it
+   * is when asked through webUtils. Without this, documents dropped on the
+   * board were quietly ignored.
+   */
+  pathForFile: (file) => { try { return (webUtils && webUtils.getPathForFile(file)) || ''; } catch { return ''; } },
   writeFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', { filePath, data }),
   openDialog: (opts) => ipcRenderer.invoke('dialog:open', opts),
   saveDialog: (opts) => ipcRenderer.invoke('dialog:save', opts),

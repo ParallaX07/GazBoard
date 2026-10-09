@@ -159,7 +159,7 @@ export function dropOrigin(app, w, h) {
   return b ? { x: b.x + b.w + DROP_GAP * 2, y: b.y } : middle;
 }
 
-export async function insertImagesFromPaths(app, paths) {
+export async function insertImagesFromPaths(app, paths, at = null) {
   const objs = [];
   const rejected = [];
   for (const p of paths) {
@@ -170,13 +170,14 @@ export async function insertImagesFromPaths(app, paths) {
     // the extension says what it is; the bytes decide
     if (!looksLikeImage(buf, ext)) { rejected.push(name); continue; }
     const dataUrl = await bytesToDataUrl(buf, mimeFor(ext));
-    objs.push(await makeImageObject(app, dataUrl, name, objs.length));
+    objs.push(await makeImageObject(app, dataUrl, name, objs.length, at));
   }
   reportRejected(app, rejected);
   if (objs.length) {
     app.store.addMany(objs, 'insert image');
     app.setSelection(objs.map((o) => o.id));
-    app.frameSelection();
+    // dropped where the pointer was: it is already in view, so the view stays put
+    if (!at) app.frameSelection();
   }
   return objs;
 }

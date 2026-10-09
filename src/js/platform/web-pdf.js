@@ -99,7 +99,14 @@ export async function generatePdfFromHtml(payload) {
         const imgWmm = parseLengthMm(imgStyle, 'width', pageWmm);
         const imgHmm = parseLengthMm(imgStyle, 'height', pageHmm);
 
-        rawItems.push({ pageWmm, pageHmm, imgWmm, imgHmm, src });
+        // links on the sheet: clear boxes, in mm from its top-left corner, each naming the sheet it jumps to
+        const links = Array.from(sheet.querySelectorAll ? sheet.querySelectorAll('a.gblink') : []).map((a) => ({
+          to: Number(a.getAttribute('data-to')),
+          x: Number(a.getAttribute('data-x')), y: Number(a.getAttribute('data-y')),
+          w: Number(a.getAttribute('data-w')), h: Number(a.getAttribute('data-h'))
+        })).filter((k) => Number.isInteger(k.to) && [k.x, k.y, k.w, k.h].every(Number.isFinite));
+
+        rawItems.push({ pageWmm, pageHmm, imgWmm, imgHmm, src, links });
       }
     } else if (doc.querySelectorAll) {
       const imgEls = Array.from(doc.querySelectorAll('img'));
@@ -144,7 +151,8 @@ export async function generatePdfFromHtml(payload) {
         yPt,
         imgWidth: width,
         imgHeight: height,
-        jpegBytes: bytes
+        jpegBytes: bytes,
+        links: item.links || []
       });
     }
 
@@ -199,9 +207,17 @@ export async function generatePdfFromHtml(payload) {
       const contentId = pageId + 1;
       const imageId = pageId + 2;
 
-      // Page Object
+      // Page Object, with a link annotation for each link that jumps to another sheet
+      const annots = p.links
+        .filter((k) => k.to >= 0 && k.to < totalPages)
+        .map((k) => {
+          const x1 = k.x * MM_TO_PT, x2 = (k.x + k.w) * MM_TO_PT;
+          const y2 = p.pageHPt - k.y * MM_TO_PT, y1 = p.pageHPt - (k.y + k.h) * MM_TO_PT;
+          return `<< /Type /Annot /Subtype /Link /Rect [${x1.toFixed(2)} ${y1.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}] /Border [0 0 0] /Dest [${pageObjIds[k.to]} 0 R /Fit] >>`;
+        });
+      const annotStr = annots.length ? ` /Annots [${annots.join(' ')}]` : '';
       offsets.push(currentOffset());
-      addString(`${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.pageWPt.toFixed(2)} ${p.pageHPt.toFixed(2)}] /Contents ${contentId} 0 R /Resources << /ProcSet [/PDF /ImageC] /XObject << /Im1 ${imageId} 0 R >> >> >>\nendobj\n`);
+      addString(`${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.pageWPt.toFixed(2)} ${p.pageHPt.toFixed(2)}] /Contents ${contentId} 0 R /Resources << /ProcSet [/PDF /ImageC] /XObject << /Im1 ${imageId} 0 R >> >>${annotStr} >>\nendobj\n`);
 
       // Content Stream Object
       const streamContent = `q ${p.imgWPt.toFixed(2)} 0 0 ${p.imgHPt.toFixed(2)} ${p.xPt.toFixed(2)} ${p.yPt.toFixed(2)} cm /Im1 Do Q\n`;

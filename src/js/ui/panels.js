@@ -51,7 +51,17 @@ export function createPanels(app) {
     panel.classList.remove('open');
     currentKey = null; currentRender = null;
     // The page fades rather than sliding away; it stops being a page once it has gone.
-    setTimeout(() => { if (currentKey !== 'boards') panel.classList.remove('page'); }, 160);
+    // Becoming the side panel again happens with no animation at all: otherwise
+    // the faded page turned back into a fully visible side panel and slid off
+    // the screen - a flash of My boards just as the board came up, filling a
+    // phone screen where the side panel is as wide as the screen.
+    setTimeout(() => {
+      if (currentKey === 'boards' || !panel.classList.contains('page')) return;
+      panel.classList.add('snap');
+      panel.classList.remove('page');
+      void panel.offsetWidth;          // settle the closed place before animations come back
+      panel.classList.remove('snap');
+    }, 160);
   }
 
   function open(key, label, render) {
@@ -2150,5 +2160,7 @@ export function createPanels(app) {
   /** A font pack arrived or went: the Settings row redraws itself. */
   function fontsChanged() { if (currentKey === 'settings') rerender(); }
 
-  return { templates, background, settings, sharing, boards, close, syncChanged, fontsChanged, get open() { return !!currentKey; }, get page() { return currentKey === 'boards' && panel.classList.contains('page'); } };
+  /** My boards, drawn again if it is up - boards and folders changed underneath it. */
+  const boardsChanged = () => { if (currentKey === 'boards') boards({ stay: true }); };
+  return { templates, background, settings, sharing, boards, close, syncChanged, fontsChanged, boardsChanged, get open() { return !!currentKey; }, get page() { return currentKey === 'boards' && panel.classList.contains('page'); } };
 }

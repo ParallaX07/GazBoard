@@ -311,7 +311,8 @@ export async function saveBoard(payload) {
       const metaStore = tx.objectStore('meta');
 
       boardsStore.put(record);
-      metaStore.put({ key: 'last-board', value: { id, at: modified } });
+      // a board saved on the side (a new board made for a link) is not the one to reopen
+      if (!(payload && typeof payload === 'object' && payload.setLast === false)) metaStore.put({ key: 'last-board', value: { id, at: modified } });
 
       tx.oncomplete = () => resolve(true);
       tx.onerror = () => {

@@ -363,6 +363,17 @@ async function runTests() {
     check('emoji font audit failed', false, e.message);
   }
 
+  /* A board made on the side - a new board for a link to point at - must not become the one that reopens. */
+  try {
+    const ws = await fsp.readFile(path.join(SRC, 'js', 'platform', 'web-storage.js'), 'utf8');
+    const save = ws.slice(ws.indexOf('export async function saveBoard'), ws.indexOf('export async function deleteBoard'));
+    const guarded = /payload\.setLast === false/.test(save) && /if \(!\(payload && typeof payload === 'object' && payload\.setLast === false\)\) metaStore\.put\(\{ key: 'last-board'/.test(save);
+    check('web: saving a board with setLast:false leaves the board that reopens alone, as desktop and Android do', guarded,
+      `saveBoard ${guarded ? 'skips' : 'always writes'} the last-board pointer when told setLast:false`);
+  } catch (e) {
+    check('web: setLast audit failed', false, e.message);
+  }
+
   /* ---------------- 2. Service Worker & Atomic Precaching Verification ---------------- */
   try {
     const swPath = path.join(SRC, 'sw.js');

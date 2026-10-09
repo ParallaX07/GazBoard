@@ -7485,6 +7485,526 @@ async function run(win, app) {
     arrowOdd.thumb === 'ok', arrowOdd.thumb);
   }
 
+  /* ---------------- links to other boards ----------------
+   * "@" in words or on the board picks another board; following a link opens
+   * it, with a pill to come back. Boards are made for real and read back, and
+   * the clicks, taps and keys are real input events, so a failure says what
+   * the board actually did.
+   */
+  {
+  const linkHelpers = String.raw`
+    const a = window.app, sf = a.surface;
+    const R = await import('app://board/js/core/boardrefs.js');
+    const RD = await import('app://board/js/core/render.js');
+    const scr = (x, y) => { const q = sf.cam.toScreen(x, y), r = sf.canvas.getBoundingClientRect(); return { x: Math.round(q.x + r.left), y: Math.round(q.y + r.top) }; };
+    const centre = (q) => ({ x: (q[0].x + q[2].x) / 2, y: (q[0].y + q[2].y) / 2 });
+    const makeBoard = async (name, extra) => { a.newBoard(true); a.store.rename(name); if (extra) await extra(); await a.persist({ force: true }); return a.store.doc.id; };
+  `;
+  const click = async (p, opts = {}) => {
+    const mods = opts.modifiers || [];
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y, modifiers: mods });
+    await sleep(60);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1, modifiers: mods });
+    await sleep(40);
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1, modifiers: mods });
+    await sleep(700);
+  };
+  const press = async (k, mods = []) => {
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: mods });
+    if (k.length === 1) win.webContents.sendInputEvent({ type: 'char', keyCode: k, modifiers: mods });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: mods });
+    await sleep(60);
+  };
+  const typeKeys = async (s) => { for (const ch of s) await press(ch); };
+
+  // 1. the text form of a link
+  const forms = await js(linkHelpers + String.raw`
+    const tok = R.refToken({ id: 'bAbc_1', name: 'Week 5 ] odd\nname', page: 3 });
+    const spans = R.refSpans('See ' + tok + ' and @[Plain](b:bX).');
+    return { tok, spans: JSON.stringify(spans.map((s) => [s.id, s.name, s.page])),
+      email: R.hasRefs('write to me@home.com'), words: R.refsAsWords('See @[Old name](b:nobody#2) now') };
+  `);
+  check('links: a link is written as @[name](b:id#page), and read back the same, with a stray ] or new line in the name made safe',
+    forms.tok === '@[Week 5   odd name](b:bAbc_1#3)' && forms.spans === '[["bAbc_1","Week 5   odd name",3],["bX","Plain",0]]',
+    `token: ${forms.tok}; read back as ${forms.spans}`);
+  check('links: an e-mail address is not a link, and copying a link out reads as @name',
+    forms.email === false && forms.words === 'See @Old name › 2 now', `"me@home.com" counted as a link: ${forms.email}; copied out as "${forms.words}"`);
+
+  // 2. boards to link to, and the board doing the linking
+  const made = await js(linkHelpers + String.raw`
+    a.backStack = []; a.settings.linkShare = {};
+    const w4 = await makeBoard('Linktest Week 4');
+    const w5 = await makeBoard('Linktest Week 5', async () => {
+      a.store.add({ id: 'lt5', type: 'text', x: 0, y: 0, w: 320, h: 40, fontSize: 24, rotation: 0, text: 'Recap: ' + R.refToken({ id: w4, name: 'Linktest Week 4' }) }, 'x');
+    });
+    const notes = await makeBoard('Linktest Notes', async () => { await a.setPageSize('a4', 'portrait'); a.addPage(); a.addPage(); });
+    const alg = await makeBoard('Linktest Algebra', async () => {
+      sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
+      a.store.add({ id: 'ltText', type: 'text', x: 100, y: 120, w: 560, h: 50, fontSize: 28, rotation: 0, color: '#201f1e',
+        text: 'See ' + R.refToken({ id: w5, name: 'Linktest Week 5' }) + ' and ' + R.refToken({ id: 'gone123', name: 'Linktest Gone' }) + ' later.' }, 'x');
+    });
+    await a.refreshBoardDirectory();
+    a.setTool('select'); a.setSelection([]); sf.invalidate();
+    await new Promise((r) => setTimeout(r, 200));
+    const rects = RD.linkRectsOf(a.store.get('ltText'));
+    return { w4, w5, notes, alg, rects: rects.map((r) => r.ref.name).join('|'), at: rects[0] ? scr(centre(rects[0].quad).x, centre(rects[0].quad).y) : null,
+      missing: [R.refMissing({ id: w5 }), R.refMissing({ id: 'gone123', name: 'Linktest Gone' })].join(','),
+      byName: R.lookupBoard({ id: 'someOtherId', name: 'linktest week 4' })?.id === w4,
+      label: R.refLabel({ id: w5, name: 'stale name', page: 0 }) };
+  `);
+  check('links: a link inside words is drawn as the board\'s name, found where it is drawn, and greyed when its board is not here',
+    made.rects === 'Linktest Week 5|Linktest Gone' && made.missing === 'false,true' && !!made.at,
+    `links found in the text: ${made.rects}; missing (week 5, gone): ${made.missing}; first at ${JSON.stringify(made.at)}`);
+  check('links: a link shows the board\'s name now, and finds a board by name when its id is not on this computer',
+    made.label === 'Linktest Week 5' && made.byName === true, `label for a link saved as "stale name": ${made.label}; found by name: ${made.byName}`);
+
+  // 3. a click on the link opens the board; the pill comes back
+  const camBefore = await js(`return window.app.surface.cam.toJSON();`);
+  if (made.at) await click(made.at);
+  const opened = await js(String.raw`
+    const a = window.app, pill = document.getElementById('backPill');
+    return { name: a.store.doc.name, stack: a.backStack.length, pill: pill ? pill.classList.contains('show') : false, text: pill ? pill.textContent : '' };
+  `);
+  check('links: a click with Select on a link in words opens that board, with a "Back to" pill naming where you came from',
+    opened.name === 'Linktest Week 5' && opened.stack === 1 && opened.pill && /Linktest Algebra/.test(opened.text),
+    `open board: ${opened.name} (wanted Linktest Week 5), back steps: ${opened.stack}, pill showing: ${opened.pill}, pill says "${opened.text}"`);
+  await js(`document.getElementById('backPill')?.click();`);
+  await sleep(900);
+  const back = await js(String.raw`
+    const a = window.app, pill = document.getElementById('backPill'), c = a.surface.cam.toJSON();
+    return { name: a.store.doc.name, stack: a.backStack.length, pill: pill ? pill.classList.contains('show') : false, cam: c };
+  `);
+  check('links: the pill goes back to the board you came from, looking where you were looking, and then goes away',
+    back.name === 'Linktest Algebra' && back.stack === 0 && !back.pill && Math.abs(back.cam.x - camBefore.x) < 1 && Math.abs(back.cam.z - camBefore.z) < 1e-6,
+    `back on: ${back.name}, steps left: ${back.stack}, pill still up: ${back.pill}, camera ${JSON.stringify(back.cam)} (was ${JSON.stringify(camBefore)})`);
+
+  // 4. a card: dragged it moves, clicked it opens; Ctrl+click opens with the pen
+  const card = await js(linkHelpers + String.raw`
+    const o = a.addBoardLink({ id: '${made.w4}', name: 'Linktest Week 4' }, { x: 400, y: 420 });
+    a.setSelection([]); a.setTool('select'); sf.invalidate();
+    return { id: o.id, mid: scr(o.x + o.w / 2, o.y + o.h / 2), x: o.x, to: scr(o.x + o.w / 2 + 120, o.y + o.h / 2) };
+  `);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: card.mid.x, y: card.mid.y }); await sleep(60);
+  win.webContents.sendInputEvent({ type: 'mouseDown', x: card.mid.x, y: card.mid.y, button: 'left', clickCount: 1 });
+  for (let i = 1; i <= 8; i++) { win.webContents.sendInputEvent({ type: 'mouseMove', x: card.mid.x + i * 15, y: card.mid.y, button: 'left', modifiers: ['leftbuttondown'] }); await sleep(16); }
+  win.webContents.sendInputEvent({ type: 'mouseUp', x: card.to.x, y: card.to.y, button: 'left', clickCount: 1 });
+  await sleep(500);
+  const dragged = await js(`const a = window.app, o = a.store.get('${card.id}'); return { name: a.store.doc.name, moved: Math.round(o.x - ${card.x}) };`);
+  check('links: dragging a card moves it and opens nothing',
+    dragged.name === 'Linktest Algebra' && dragged.moved > 80, `still on: ${dragged.name}; card moved ${dragged.moved} (wanted about 120)`);
+  const cardAt = await js(linkHelpers + `const o = a.store.get('${card.id}'); a.setSelection([]); return scr(o.x + o.w / 2, o.y + o.h / 2);`);
+  await click(cardAt);
+  const cardOpened = await js(`const a = window.app; return { name: a.store.doc.name, stack: a.backStack.length };`);
+  check('links: a click on a card opens its board',
+    cardOpened.name === 'Linktest Week 4' && cardOpened.stack === 1, `open board: ${cardOpened.name} (wanted Linktest Week 4), back steps: ${cardOpened.stack}`);
+  await js(`await window.app.goBack();`);
+  await sleep(500);
+  await js(`window.app.setTool('pen');`);
+  await click(cardAt, { modifiers: ['control'] });
+  const ctrlOpened = await js(`const a = window.app; return { name: a.store.doc.name, strokes: 0 };`);
+  check('links: Ctrl+click on a card opens it with the pen in hand',
+    ctrlOpened.name === 'Linktest Week 4', `open board: ${ctrlOpened.name} (wanted Linktest Week 4)`);
+  await js(`await window.app.goBack();`);
+  await sleep(500);
+  // a plain pen tap on a card is ink, unless the board is being presented
+  await js(`window.app.setTool('pen');`);
+  await click(cardAt);
+  const penTap = await js(`const a = window.app; return { name: a.store.doc.name };`);
+  await js(`window.app.startPresenting({ fullscreen: false }); window.app.setTool('pen');`);
+  await sleep(400);
+  const cardAtPresent = await js(linkHelpers + `const o = a.store.get('${card.id}'); return scr(o.x + o.w / 2, o.y + o.h / 2);`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: cardAtPresent.x, y: cardAtPresent.y }); await sleep(40);
+  await js(String.raw`
+    const c = window.app.surface.canvas, r = c.getBoundingClientRect();
+    const ev = (type, extra = {}) => new PointerEvent(type, { pointerId: 77, pointerType: 'pen', isPrimary: true, bubbles: true, cancelable: true,
+      clientX: ${cardAtPresent.x}, clientY: ${cardAtPresent.y}, button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' ? 0 : 1, pressure: type === 'pointerup' ? 0 : 0.5, ...extra });
+    c.dispatchEvent(ev('pointerdown')); c.dispatchEvent(ev('pointerup'));
+  `);
+  await sleep(900);
+  const presentTap = await js(`const a = window.app; const r = { name: a.store.doc.name, presenting: !!a.presenting }; return r;`);
+  check('links: a pen tap on a card is just a tap when not presenting, and opens the board while presenting',
+    penTap.name === 'Linktest Algebra' && presentTap.name === 'Linktest Week 4',
+    `pen tap not presenting left us on: ${penTap.name} (wanted Linktest Algebra); pen tap presenting opened: ${presentTap.name} (wanted Linktest Week 4), still presenting: ${presentTap.presenting}`);
+  await js(`await window.app.goBack(); window.app.stopPresenting(); window.app.setTool('select');`);
+  await sleep(500);
+
+  // 5. typing "@" in words: the list, Enter, a link with a space after it
+  await js(`const a = window.app; a.beginTextEdit(a.store.get('ltText'));`);
+  await sleep(300);
+  await typeKeys(' @linktest no');
+  await sleep(400);
+  const listed = await js(`const m = window.app.textEditor.mention; return { open: !!m?.open, rows: JSON.stringify(m?.rows?.map((r) => r.kind + ':' + (r.name || ''))) };`);
+  check('links: typing @ and a few letters in a text box lists the boards whose names match',
+    listed.open && /board:Linktest Notes/.test(listed.rows) && !/Linktest Algebra/.test(listed.rows),
+    `list open: ${listed.open}; rows: ${listed.rows} (wanted Linktest Notes, and never the board being typed on)`);
+  await press('Return');
+  await sleep(300);
+  const typed = await js(`return window.app.textEditor.el?.value;`);
+  await js(`window.app.textEditor.commit();`);
+  const stored = await js(`return window.app.store.get('ltText').text;`);
+  check('links: Enter puts the link in, then a space to carry on typing, and it is saved with the words',
+    new RegExp('@\\[Linktest Notes\\]\\(b:' + made.notes + '\\) $').test(typed) && stored === typed,
+    `in the box: ${JSON.stringify(typed)}; saved: ${JSON.stringify(stored)}`);
+
+  // 6. making a board from the list
+  await js(`const a = window.app; a.beginTextEdit(a.store.get('ltText'));`);
+  await sleep(300);
+  await typeKeys('@Linktest Zebra');
+  await sleep(400);
+  const offer = await js(`const m = window.app.textEditor.mention; return JSON.stringify(m?.rows?.map((r) => r.kind + ':' + (r.name || '')));`);
+  await press('Return');
+  await sleep(900);
+  const createdText = await js(`const a = window.app; a.textEditor.commit(); return a.store.get('ltText').text;`);
+  const created = await js(String.raw`
+    const a = window.app, list = await window.board.boards.list();
+    const z = list.find((b) => b.name === 'Linktest Zebra');
+    return { here: a.store.doc.name, zebra: z ? z.id : null, last: await window.board.boards.last?.() };
+  `);
+  check('links: when nothing has the name typed, the list offers to make it - and the board is made on the side, linked, without leaving this one',
+    /create:Linktest Zebra/.test(offer) && !!created.zebra && createdText.includes('(b:' + created.zebra + ')') && created.here === 'Linktest Algebra' && created.last !== created.zebra,
+    `offered: ${offer}; made: ${created.zebra}; linked in text: ${createdText.includes('(b:' + created.zebra + ')')}; still on: ${created.here}; reopens next time: ${created.last === created.zebra ? 'the new board (wrong)' : 'not the new board'}`);
+
+  // 7. "@" on the board: a card, for one page of a paper board
+  await js(linkHelpers + `a.setSelection([]); a.setTool('select'); a.boardPoint = { x: 700, y: 300, at: performance.now() };`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: 700, y: 360 });
+  await sleep(100);
+  await press('@');
+  await sleep(300);
+  await typeKeys('linktest notes');
+  await sleep(500);
+  const pickerRows = await js(`return JSON.stringify(window.app.boardPicker?.rows?.map((r) => r.kind + ':' + (r.name || '')));`);
+  await press('Right');
+  await sleep(200);
+  const pageRows = await js(`return JSON.stringify(window.app.boardPicker?.rows?.map((r) => r.kind + ':' + (r.page ?? '')));`);
+  await press('Down'); await press('Down');
+  await press('Return');
+  await sleep(400);
+  const placed = await js(linkHelpers + String.raw`
+    const o = a.store.objects.filter((x) => x.type === 'boardlink').pop();
+    return { board: JSON.stringify(o && o.board), sel: a.surface.selection.has(o && o.id), at: o ? scr(o.x + o.w / 2, o.y + o.h / 2) : null };
+  `);
+  check('links: @ on the board lists boards with a search box, opens a paper board up into its pages, and puts down a card for the page chosen',
+    /board:Linktest Notes/.test(pickerRows) && pageRows === '["back:","page:0","page:1","page:2","page:3"]' && placed.board === JSON.stringify({ id: made.notes, name: 'Linktest Notes', page: 2 }) && placed.sel,
+    `rows: ${pickerRows}; pages: ${pageRows}; card: ${placed.board} (wanted page 2 of Linktest Notes), selected: ${placed.sel}`);
+  await js(`window.app.setSelection([]);`);
+  if (placed.at) await click(placed.at);
+  await sleep(400);
+  const onPage = await js(`const a = window.app; return { name: a.store.doc.name, page: a.currentPageIndex() };`);
+  check('links: a card for a page opens its board on that page',
+    onPage.name === 'Linktest Notes' && onPage.page === 1, `opened ${onPage.name} on page index ${onPage.page} (wanted Linktest Notes, index 1)`);
+  await js(`await window.app.goBack();`);
+  await sleep(500);
+
+  // 8. which boards link here
+  await js(`const a = window.app; await a.loadBoard(await window.board.boards.load('${made.w5}'), { claimed: true });`);
+  await sleep(300);
+  await js(`await window.app.syncLinkedFrom();`);
+  const linkedFrom = await js(`const el = document.getElementById('linkedFrom'); el.click(); await new Promise((r) => setTimeout(r, 200));
+    const names = [...document.querySelectorAll('.lf-pop .bp-name')].map((x) => x.textContent); document.body.click(); return { hidden: el.hidden, text: el.textContent, names: names.join('|') };`);
+  check('links: a board that others link to says so beside its name, and lists them',
+    !linkedFrom.hidden && /1/.test(linkedFrom.text) && linkedFrom.names === 'Linktest Algebra',
+    `badge hidden: ${linkedFrom.hidden}, says "${linkedFrom.text}", lists: ${linkedFrom.names} (wanted Linktest Algebra)`);
+  await js(`const a = window.app; window.__closePop?.(); await a.loadBoard(await window.board.boards.load('${made.alg}'), { claimed: true });`);
+  await sleep(300);
+
+  // 9. sending or saving a board with links: asked, and they go along
+  const course = await js(linkHelpers + String.raw`
+    return await makeBoard('Linktest Course', async () => { a.addBoardLink({ id: '${made.w5}', name: 'Linktest Week 5' }, { x: 0, y: 0 }); });
+  `);
+  const asked = await js(String.raw`
+    const a = window.app; a.settings.linkShare = {};
+    const p = a.askAboutLinkedBoards('send');
+    await new Promise((r) => setTimeout(r, 500));
+    const card = document.getElementById('overlayCard');
+    const rows = [...card.querySelectorAll('.check-row')].map((r) => r.textContent).join('|');
+    const title = card.querySelector('h3')?.textContent;
+    card.querySelectorAll('.check-row input')[card.querySelectorAll('.check-row input').length - 2].click();   // their links too
+    [...card.querySelectorAll('button')].find((b) => /Include/.test(b.textContent)).click();
+    const ids = await p;
+    const names = (await window.board.boards.list()).filter((b) => ids.includes(b.id)).map((b) => b.name).sort().join('|');
+    return { title, rows, names };
+  `);
+  check('links: sending a board that links to others asks to take them along, and can take the boards they link to as well',
+    /links to another board/.test(asked.title) && /^Linktest Week 5\|Also the 1 board they link to\|/.test(asked.rows) && asked.names === 'Linktest Week 4|Linktest Week 5',
+    `asked: "${asked.title}"; ticks: ${asked.rows}; included: ${asked.names} (wanted Week 5, and Week 4 that it links to)`);
+  const sent = await js(String.raw`
+    const a = window.app, got = [];
+    a.settings.linkShare = { [a.store.doc.id]: 'include' };
+    const say = (doc) => doc.name + (doc.origin ? ' (with origin)' : '') + (doc.linkedBoards ? ' [+' + doc.linkedBoards.map((d) => d.name).join(',') + ']' : '');
+    // a device on 4.5: one transfer, one answer, the linked boards inside
+    a.syncSend = async (peer, doc) => { got.push(say(doc)); return { ok: true, result: { accepted: true, outcome: 'kept-both;linked=' + (doc.linkedBoards || []).length } }; };
+    const okNew = await a.sendCurrentBoardTo({ deviceId: 'peer-x', name: 'Peer' });
+    const toNew = got.join('|');
+    // an older device saves the board alone and says nothing of the rest: they follow one by one
+    got.length = 0;
+    a.syncSend = async (peer, doc) => { got.push(say(doc)); return { ok: true, result: { accepted: true, outcome: 'kept-both' } }; };
+    const okOld = await a.sendCurrentBoardTo({ deviceId: 'peer-x', name: 'Peer' });
+    const toOld = got.join('|');
+    delete a.syncSend;
+    return { okNew, toNew, okOld, toOld };
+  `);
+  check('links: the boards it links to travel inside it, so the other side answers once',
+    sent.okNew && sent.toNew === 'Linktest Course [+Linktest Week 5]',
+    `sent: ${sent.toNew} (wanted one transfer: Linktest Course carrying Linktest Week 5), ok: ${sent.okNew}`);
+  check('links: a device on an older version, which takes only the board itself, gets the linked boards one by one afterwards',
+    sent.okOld && sent.toOld === 'Linktest Course [+Linktest Week 5]|Linktest Week 5',
+    `sent: ${sent.toOld} (wanted the bundle, then Linktest Week 5 on its own), ok: ${sent.okOld}`);
+  const busy = await js(String.raw`
+    const a = window.app, calls = [], toasts = [], was = a.toast;
+    a.toast = (m, ...rest) => { toasts.push(String(m)); return was.call(a, m, ...rest); };
+    a._busyRetryMs = 50;
+    // the phone is still putting the last board away for the first two knocks, then takes this one
+    a.syncSend = async (peer, doc) => { calls.push(doc.name); return calls.length < 3
+      ? { ok: false, error: 'Receiving another board; try again shortly' } : { ok: true, result: { accepted: true, outcome: 'kept-both' } }; };
+    const okBusy = await a.sendBoardDoc({ deviceId: 'peer-x', name: 'Peer' }, { name: 'Busy test', objects: [] });
+    const busyCalls = calls.length, busyToasts = toasts.join(' | ');
+    // a device that stays busy past the waiting time: given up on, and said so
+    calls.length = 0; toasts.length = 0; a._busyRetryForMs = 300;
+    a.syncSend = async (peer, doc) => { calls.push(doc.name); return { ok: false, error: 'Receiving another board; try again shortly' }; };
+    const okStuck = await a.sendBoardDoc({ deviceId: 'peer-x', name: 'Peer' }, { name: 'Stuck test', objects: [] });
+    const stuckCalls = calls.length, stuckToasts = toasts.join(' | ');
+    delete a._busyRetryForMs;
+    // one linked board turned down: the rest, and this board, still go
+    calls.length = 0;
+    a.syncSend = async (peer, doc) => { calls.push(doc.name); return { ok: true, result: { accepted: doc.name !== 'Linktest Week 5', outcome: 'kept-both' } }; };
+    a.settings.linkShare = { [a.store.doc.id]: 'all' };
+    const okAll = await a.sendCurrentBoardTo({ deviceId: 'peer-x', name: 'Peer' });
+    a.settings.linkShare = {};
+    delete a.syncSend; delete a._busyRetryMs; a.toast = was;
+    return { okBusy, busyCalls, busyToasts, okAll, sentAll: calls.join('|'), okStuck, stuckCalls, stuckToasts };
+  `);
+  check('links: a device still busy with the last board is tried again, not reported as a failure',
+    busy.okBusy === true && busy.busyCalls === 3 && !/Could not send/.test(busy.busyToasts),
+    `result: ${busy.okBusy}, tries: ${busy.busyCalls} (wanted 3), messages: "${busy.busyToasts}"`);
+  check('links: a device that stays busy past the waiting time is given up on, with a message saying why',
+    busy.okStuck === false && busy.stuckCalls > 1 && /Could not send/.test(busy.stuckToasts),
+    `result: ${busy.okStuck} (wanted false), tries: ${busy.stuckCalls} (wanted several), messages: "${busy.stuckToasts}"`);
+  check('links: a linked board turned down does not stop the others, or this board, from being sent',
+    busy.okAll === true && busy.sentAll === 'Linktest Course|Linktest Week 5|Linktest Week 4',
+    `sent: ${busy.sentAll} (wanted the Course board, then Week 5 - turned down - and still Week 4), finished ok: ${busy.okAll}`);
+  const alone = await js(String.raw`
+    const a = window.app; a.settings.linkShare = {};
+    const p = a.askAboutLinkedBoards('save');
+    await new Promise((r) => setTimeout(r, 300));
+    const card = document.getElementById('overlayCard');
+    [...card.querySelectorAll('.check-row input')].pop().click();     // don't ask again
+    [...card.querySelectorAll('button')].find((b) => /Just this/.test(b.textContent)).click();
+    const first = await p;
+    const again = await a.askAboutLinkedBoards('save');
+    const remembered = a.settings.linkShare[a.store.doc.id];
+    a.settings.linkShare = {};
+    return { first: JSON.stringify(first), again: JSON.stringify(again), remembered, dialogUp: document.getElementById('overlay').classList.contains('show') };
+  `);
+  check('links: "Just this board" with "Don\'t ask again" is remembered for that board',
+    alone.first === '[]' && alone.again === '[]' && alone.remembered === 'alone' && !alone.dialogUp,
+    `first answer: ${alone.first}, second (unasked): ${alone.again}, remembered: ${alone.remembered}, dialog left up: ${alone.dialogUp}`);
+  await js(`const a = window.app; await a.loadBoard(await window.board.boards.load('${made.alg}'), { claimed: true });`);
+  await sleep(300);
+  // Save a copy with the linked boards: one .zip
+  {
+    const { ipcMain, dialog } = require('electron');
+    const os = require('node:os');
+    const zipPath = path.join(os.tmpdir(), 'gb-linktest-' + Date.now() + '.zip');
+    ipcMain.removeHandler('dialog:save');
+    ipcMain.handle('dialog:save', async () => zipPath);
+    let zipped = { size: 0, names: '' };
+    try {
+      await js(`const a = window.app; a.settings.linkShare = { [a.store.doc.id]: 'include' }; await a.saveBoardCopy(); a.settings.linkShare = {};`);
+      const buf = await fs.readFile(zipPath);
+      const text = buf.toString('latin1');
+      zipped = { size: buf.length, pk: text.slice(0, 2), names: ['Linktest Algebra.gazboard', 'Linktest Week 5.gazboard', 'Linktest Notes.gazboard'].filter((n) => text.includes(n)).length };
+    } catch (e) { zipped.error = e.message; }
+    finally {
+      ipcMain.removeHandler('dialog:save');
+      ipcMain.handle('dialog:save', async (_e, opts) => { const r = await dialog.showSaveDialog(win, opts || {}); return r.canceled ? null : r.filePath; });
+      fs.unlink(zipPath).catch(() => {});
+    }
+    check('links: "Save a copy" with the linked boards writes them all into one .zip',
+      zipped.pk === 'PK' && zipped.names === 3, `file: ${zipped.size} bytes starting "${zipped.pk}", boards found inside: ${zipped.names} of 3${zipped.error ? ', error: ' + zipped.error : ''}`);
+  }
+
+  // 10. a board that arrived over the network still answers to the id it had over there
+  const viaSync = await js(linkHelpers + String.raw`
+    R.setBoardDirectory([...(await window.board.boards.list()), { id: 'localCopy1', name: 'Arrived', origin: 'sync:dev9/farAwayId', modified: 1 }]);
+    const hit = R.lookupBoard({ id: 'farAwayId', name: 'Something else' });
+    await a.refreshBoardDirectory();
+    return hit ? hit.id : null;
+  `);
+  check('links: a board that came over the network is found by the id it had on the computer it came from',
+    viaSync === 'localCopy1', `found: ${viaSync} (wanted localCopy1)`);
+
+  // 11. out of the app: SVG and copied words show names, never the raw link
+  const outside = await js(String.raw`
+    const a = window.app, E = await import('app://board/js/export.js');
+    a.setSelection(['ltText']);
+    const words = a.selectedWords().text;
+    const svg = E.buildSvg(a, { x: -100, y: -100, w: 1400, h: 1000 });
+    a.setSelection([]);
+    return { words, raw: /\]\(b:/.test(svg), name: svg.includes('Linktest Week 5'), card: /<image[^>]*>\s*<title>Linktest Week 4<\/title>/.test(svg) };
+  `);
+  check('links: copied words and SVG exports show the boards\' names, never the link\'s inner text, and a card goes out as a picture',
+    !/\]\(b:/.test(outside.words) && /@Linktest Week 5/.test(outside.words) && !outside.raw && outside.name && outside.card,
+    `copied: ${JSON.stringify(outside.words)}; raw link text in SVG: ${outside.raw}; name in SVG: ${outside.name}; card picture: ${outside.card}`);
+
+  // 11b. a PDF or SVG can carry the boards it links to, and its links jump to them
+  {
+    const linkPdfPath = path.join(OUT, 'linked-boards.pdf');
+    const lx = await js(String.raw`
+      const a = window.app, E = await import('app://board/js/export.js'), W = await import('app://board/js/platform/web-pdf.js');
+      await a.loadBoard(await window.board.boards.load('${made.alg}'), { claimed: true });
+      a.setSelection([]);
+      // what the question says when it is a PDF
+      a.settings.linkShare = {};
+      const asking = a.askAboutLinkedBoards('pdf');
+      await new Promise((r) => setTimeout(r, 300));
+      const said = document.querySelector('#overlayCard p')?.textContent || '';
+      [...document.querySelectorAll('#overlayCard button')].find((b) => /Cancel/.test(b.textContent)).click();
+      const cancelled = await asking;
+      // the PDF: catch the page it is printed from, and print it the phone's way too
+      let payload = null;
+      const printer = (p) => { payload = p; return window.board.exportPdf(p); };
+      const wrote = await E.exportPdf(a, { paper: 'a4', orientation: 'landscape', margin: 'narrow', mode: 'fit', quality: 1, filePath: ${JSON.stringify(linkPdfPath)}, linked: ['${made.w5}', '${made.w4}', '${made.notes}'], printer });
+      const html = payload?.html || '';
+      const sheets = (html.match(/class="sheet"/g) || []).length;
+      const hrefs = [...new Set([...html.matchAll(/href="#(s\d+)"/g)].map((m) => m[1]))].sort().join(',');
+      const phone = await W.generatePdfFromHtml(payload);
+      const phoneText = phone.ok ? new TextDecoder('latin1').decode(new Uint8Array(phone.data)) : '';
+      const phoneLinks = (phoneText.match(/\/Subtype \/Link/g) || []).length;
+      const toNotesPage2 = phoneText.includes('/Dest [15 0 R /Fit]');      // the 5th sheet's page is object 3 + 4*3
+      // the SVG: the linked boards under this one, and a <view> for each to jump to
+      const others = await E.linkedSources(a, ['${made.w5}', '${made.notes}']);
+      const svg = E.buildSvg(a, { x: -100, y: -100, w: 1400, h: 1000 }, others);
+      const views = [...svg.matchAll(/<view id="gb-([^"]+)"/g)].map((m) => m[1]);
+      const svgHrefs = [...new Set([...svg.matchAll(/<a href="#gb-([^"]+)"/g)].map((m) => m[1]))];
+      let parses = true; try { const d = new DOMParser().parseFromString(svg, 'image/svg+xml'); parses = !d.querySelector('parsererror'); } catch { parses = false; }
+      return { said, cancelled, wrote: !!wrote, sheets, hrefs, phoneOk: phone.ok, phoneLinks, toNotesPage2,
+        views, svgHrefs, parses, named: svg.includes('>Linktest Week 5</text>'),
+        ids: { alg: '${made.alg}', w5: '${made.w5}', w4: '${made.w4}', notes: '${made.notes}' } };
+    `);
+    const pdfBuf = await fs.readFile(linkPdfPath).catch(() => null);
+    const pdfText = pdfBuf ? pdfBuf.toString('latin1') : '';
+    const pdfPages = (pdfText.match(/\/Type\s*\/Page[^s]/g) || []).length;
+    const pdfLinks = (pdfText.match(/\/Subtype\s*\/Link/g) || []).length;
+    check('links: exporting a PDF asks about the linked boards, saying they go in after it',
+      /PDF after this board/.test(lx.said) && lx.cancelled === null,
+      `the question said: "${lx.said}"; Cancel gave: ${JSON.stringify(lx.cancelled)} (wanted null)`);
+    check('links: a PDF with its linked boards has a page for each - this board, Week 5, Week 4 and the 3 pages of Notes',
+      lx.wrote && lx.sheets === 6 && pdfPages === 6,
+      `written: ${lx.wrote}; sheets in the page printed: ${lx.sheets}; pages in the PDF: ${pdfPages} (wanted 6)`);
+    check('links: in that PDF the links jump to the linked boards, and a link to page 2 of Notes jumps to that page',
+      /(^|,)s1(,|$)/.test(lx.hrefs) && /(^|,)s2(,|$)/.test(lx.hrefs) && /(^|,)s4(,|$)/.test(lx.hrefs) && pdfLinks >= 3,
+      `jumps in the printed page: ${lx.hrefs} (wanted s1 Week 5, s2 Week 4, s4 Notes page 2); link areas in the PDF: ${pdfLinks}`);
+    check('links: the phone\'s own PDF writer makes the same links',
+      lx.phoneOk && lx.phoneLinks >= 3 && lx.toNotesPage2,
+      `written: ${lx.phoneOk}; link areas: ${lx.phoneLinks} (wanted 3 or more); one jumping to Notes page 2: ${lx.toNotesPage2}`);
+    check('links: an SVG with its linked boards puts them under it with a view to jump to, page by page for a pad',
+      lx.parses && lx.named && lx.views.includes(lx.ids.alg) && lx.views.includes(lx.ids.w5) && lx.views.includes(lx.ids.notes) && lx.views.includes(lx.ids.notes + '-p2'),
+      `valid SVG: ${lx.parses}; Week 5 named: ${lx.named}; views: ${lx.views.join(', ')} (wanted the board, Week 5, Notes and Notes-p2)`);
+    check('links: in that SVG the links to boards in it are clickable, and a link to a board left out is not',
+      lx.svgHrefs.includes(lx.ids.w5) && lx.svgHrefs.includes(lx.ids.notes + '-p2') && !lx.svgHrefs.includes(lx.ids.w4),
+      `clickable to: ${lx.svgHrefs.join(', ')} (wanted Week 5 and Notes-p2, not Week 4 ${lx.ids.w4})`);
+  }
+
+  // 12. while a board's pages are being counted the list shows a turning ring, and → is not lost
+  await js(String.raw`
+    const a = window.app, BP = await import('app://board/js/ui/boardpicker.js');
+    await a.loadBoard(await window.board.boards.load('${made.alg}'), { claimed: true });
+    BP.forgetPageCounts();
+    window.__realCount = BP.pageCounter.load;
+    BP.pageCounter.load = (id) => new Promise((res) => setTimeout(() => res(window.__realCount(id)), 3000));   // slower than the typing below
+    a.setSelection([]); a.setTool('select'); a.boardPoint = { x: 700, y: 300, at: performance.now() };
+  `);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: 700, y: 360 });
+  await sleep(80);
+  await press('@');
+  await sleep(200);
+  await typeKeys('linktest notes');
+  await sleep(150);
+  const spinning = await js(`const p = window.app.boardPicker; return { marks: JSON.stringify(p?.spinning), rows: JSON.stringify(p?.rows?.map((r) => r.kind)) };`);
+  await press('Right');
+  await sleep(150);
+  const stillWaiting = await js(`return JSON.stringify(window.app.boardPicker?.rows?.map((r) => r.kind));`);
+  await sleep(3500);
+  const afterCount = await js(`const p = window.app.boardPicker; return { rows: JSON.stringify(p?.rows?.map((r) => r.kind + ':' + (r.page ?? ''))), marks: JSON.stringify(p?.spinning) };`);
+  await press('Escape');
+  await js(`const BP = await import('app://board/js/ui/boardpicker.js'); BP.pageCounter.load = window.__realCount; delete window.__realCount;`);
+  check('links: while a board\'s pages are being counted its row shows a turning ring instead of the arrow',
+    /"spin"/.test(spinning.marks) && /board/.test(spinning.rows),
+    `row marks while counting: ${spinning.marks} (wanted a "spin"); rows: ${spinning.rows}`);
+  check('links: → pressed while the pages are still being counted opens them as soon as they are known',
+    /^\["board"/.test(stillWaiting) && afterCount.rows === '["back:","page:0","page:1","page:2","page:3"]',
+    `rows just after →: ${stillWaiting} (still the board list, waiting); a moment later: ${afterCount.rows} (wanted the pages of Linktest Notes)`);
+
+  await js(`const a = window.app; a.backStack = []; a.syncBackPill(); a.settings.linkShare = {}; a.setTool('select'); a.newBoard(true);`);
+  await sleep(200);
+  }
+
+  /* ---------------- files dropped on the board ----------------
+   * Electron 32 took File.path away, so dropped documents were quietly
+   * ignored on the desktop. Files on disk are dropped here the way the board
+   * receives them (named, with the place on disk they came from), and the
+   * board's answer is read back.
+   */
+  {
+    const os = require('node:os');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gb-drop-'));
+    const png = path.join(dir, 'dropped dot.png');
+    await fs.writeFile(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8DwnwEIGBmgAAAKCAIB4oO1QAAAAABJRU5ErkJggg==', 'base64'));
+    const boardFile = path.join(dir, 'Dropped board.gazboard');
+    await fs.writeFile(boardFile, JSON.stringify({ id: 'bDropTest1', name: 'Dropped board', schema: 2, created: 1, modified: 1,
+      background: { color: '#ffffff', pattern: 'none', patternColor: '#c8c6c4' }, pages: [], camera: { x: 0, y: 0, z: 1 },
+      objects: [{ id: 'dn', type: 'note', x: 0, y: 0, w: 200, h: 200, color: '#ffd94a', text: 'from a file', rotation: 0 }] }));
+    const pdf = path.join(FIX, 'sample.pdf');
+    const dropped = await js(String.raw`
+      const a = window.app, toasts = [], was = a.toast;
+      a.toast = (m, ...rest) => { toasts.push(String(m)); return was.call(a, m, ...rest); };
+      try {
+        a.newBoard(true); a.setSelection([]);
+        const asked = typeof window.board.pathForFile === 'function';
+        const onDisk = (p, type) => ({ name: p.split(/[\\/]/).pop(), path: p, type });
+        // a picture, dropped at (500, 400)
+        await a.dropFiles([onDisk(${JSON.stringify(png)}, 'image/png')], { x: 500, y: 400 });
+        const img = a.store.objects.find((o) => o.type === 'image');
+        const imgAt = img ? Math.round(img.x + img.w / 2) + ',' + Math.round(img.y + img.h / 2) : 'none';
+        // a document: its page chooser comes up (it has several pages); Escape puts it away
+        const going = a.dropFiles([onDisk(${JSON.stringify(pdf)}, 'application/pdf')], { x: 0, y: 0 });
+        let chooser = false;
+        for (let i = 0; i < 150 && !chooser; i++) { await new Promise((r) => setTimeout(r, 50)); chooser = document.getElementById('overlayCard').classList.contains('picker'); }
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await going;
+        // something it cannot use is named, not ignored
+        toasts.length = 0;
+        await a.dropFiles([onDisk('/nowhere/notes.zip', 'application/zip')], { x: 0, y: 0 });
+        const refused = toasts.join(' | ');
+        // a web page's drop (no place on disk): pictures go in, a document is pointed to Add
+        toasts.length = 0;
+        const blob = await (await fetch('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8DwnwEIGBmgAAAKCAIB4oO1QAAAAABJRU5ErkJggg==')).blob();
+        const before = a.store.objects.filter((o) => o.type === 'image').length;
+        await a.dropFiles([new File([blob], 'web.png', { type: 'image/png' }), new File(['%PDF-1.4'], 'web.pdf', { type: 'application/pdf' })], { x: 200, y: 200 });
+        const webImgs = a.store.objects.filter((o) => o.type === 'image').length - before;
+        const webSaid = toasts.join(' | ');
+        // a board file opens
+        await a.dropFiles([onDisk(${JSON.stringify(boardFile)}, '')], { x: 0, y: 0 });
+        for (let i = 0; i < 60 && a.store.doc.name !== 'Dropped board'; i++) await new Promise((r) => setTimeout(r, 50));
+        return { asked, imgAt, chooser, refused, webImgs, webSaid, opened: a.store.doc.name, note: !!a.store.objects.find((o) => o.type === 'note' && o.text === 'from a file') };
+      } finally { a.toast = was; }
+    `);
+    check('drop: the desktop app can ask where a dropped file is on disk (File.path is gone since Electron 32)',
+      dropped.asked === true, `window.board.pathForFile is ${dropped.asked ? 'there' : 'missing'}`);
+    check('drop: a dropped picture lands where it was dropped',
+      dropped.imgAt === '500,400', `picture centred at ${dropped.imgAt} (wanted 500,400)`);
+    check('drop: a dropped PDF is imported - its page chooser comes up',
+      dropped.chooser === true, `page chooser shown: ${dropped.chooser}`);
+    check('drop: a file the board cannot use is named in a message, not silently ignored',
+      /notes\.zip/.test(dropped.refused), `said: "${dropped.refused}"`);
+    check('drop: from a web page, pictures go in and a document is pointed to Add',
+      dropped.webImgs === 1 && /web\.pdf/.test(dropped.webSaid), `pictures added: ${dropped.webImgs} (wanted 1); said: "${dropped.webSaid}"`);
+    check('drop: a dropped .gazboard file opens as a board',
+      dropped.opened === 'Dropped board' && dropped.note, `open board: ${dropped.opened} (wanted Dropped board), its note there: ${dropped.note}`);
+    await js(`window.app.newBoard(true);`);
+    fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+
   check('and pressing that button brings the work onto the page, losing none of it',
     sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
     sizeMenu.offerGoneWhenNothingStray === true,
@@ -11656,6 +12176,192 @@ module.exports.run = async (win, app) => {
   check('and the copy on disk is the new one, not the one it replaced',
     onDisk === 3, `${onDisk} item(s) on disk`);
 
+  // A question pushed aside by another dialog comes back once that dialog is
+  // done - otherwise the sender waits five minutes for an answer nobody can give.
+  const hijack = await js(String.raw`
+    const a = window.app;
+    const p = a.handleIncomingBoard({ ticket: 't-hijack', from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: 'in-hijack', name: 'Hijacked question', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [] } });
+    await new Promise((r) => setTimeout(r, 400));
+    const first = document.querySelector('#overlayCard h3')?.textContent || '';
+    const other = a.choose('Something else', 'An unrelated question', [{ id: 'ok', label: 'Fine' }]);
+    await new Promise((r) => setTimeout(r, 200));
+    const during = document.querySelector('#overlayCard h3')?.textContent || '';
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Fine').click();
+    await other;
+    await new Promise((r) => setTimeout(r, 900));
+    const back = document.querySelector('#overlayCard h3')?.textContent || '';
+    const shown = document.getElementById('overlay').classList.contains('show');
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Decline')?.click();
+    const settled = await Promise.race([p.then(() => 'answered'), new Promise((r) => setTimeout(() => r('still waiting'), 3000))]);
+    return { first, during, back, shown, settled };
+  `);
+  check('an arriving board\'s question that another dialog covered is asked again once that dialog is closed',
+    /Classroom PC/.test(hijack.first) && hijack.during === 'Something else' && /Classroom PC/.test(hijack.back) && hijack.shown && hijack.settled === 'answered',
+    `first: "${hijack.first}", while covered: "${hijack.during}", afterwards: "${hijack.back}" (shown: ${hijack.shown}), then: ${hijack.settled}`);
+
+  const jam = await js(String.raw`
+    const a = window.app, realLoad = a.loadBoard;
+    a._openWaitMs = 300;
+    a.settings.syncOpenOnArrival = true;
+    // a board that never finishes opening
+    a.loadBoard = () => new Promise(() => {});
+    const msg = (n) => ({ ticket: 't-jam-' + n, from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: 'in-jam-' + n, name: 'Jam ' + n, schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [] } });
+    a.queueIncomingBoard(msg(1));
+    await new Promise((r) => setTimeout(r, 400));
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Save it')?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    a.queueIncomingBoard(msg(2));
+    await new Promise((r) => setTimeout(r, 900));
+    const second = document.getElementById('overlay').classList.contains('show') ? (document.querySelector('#overlayCard .actions')?.parentElement?.textContent || '') : '';
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Decline')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    a.loadBoard = realLoad; delete a._openWaitMs;
+    return { asked: /Jam 2/.test(second), busy: a._incomingBusy };
+  `);
+  check('a board that never finishes opening does not stop the next arriving board from being asked about',
+    jam.asked === true && jam.busy === false, `second board asked about: ${jam.asked}; queue still busy afterwards: ${jam.busy}`);
+
+  const batch = await js(String.raw`
+    const a = window.app, opened = [], realLoad = a.loadBoard;
+    a.settings.syncOpenOnArrival = true; a._nextBoardWaitMs = 600;
+    a.loadBoard = async (d) => { opened.push(d.name); };
+    const msg = (n) => ({ ticket: 't-batch-' + n + '-' + Date.now(), from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: 'in-batch-' + n, name: 'Batch ' + n, schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [] } });
+    const answer = async () => { for (let i = 0; i < 30 && !document.querySelector('#overlayCard button'); i++) await new Promise((r) => setTimeout(r, 50));
+      [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Save it')?.click(); };
+    // the sender sends the next board a moment after each answer, as it does with linked boards
+    a.queueIncomingBoard(msg(1)); await new Promise((r) => setTimeout(r, 300)); await answer();
+    await new Promise((r) => setTimeout(r, 200)); a.queueIncomingBoard(msg(2)); await new Promise((r) => setTimeout(r, 300)); await answer();
+    await new Promise((r) => setTimeout(r, 200)); a.queueIncomingBoard(msg(3)); await new Promise((r) => setTimeout(r, 300)); await answer();
+    await new Promise((r) => setTimeout(r, 1200));
+    a.loadBoard = realLoad; delete a._nextBoardWaitMs;
+    return { opened: opened.join('|') };
+  `);
+  check('boards sent together are each asked about, and only the last one opens - none is buried under the one before',
+    batch.opened === 'Batch 3', `opened: ${batch.opened || 'nothing'} (wanted only Batch 3)`);
+
+  const bundled = await js(String.raw`
+    const a = window.app, realLoad = a.loadBoard;
+    a.loadBoard = async () => {};
+    const R = await import('app://board/js/core/boardrefs.js');
+    // one of the linked boards has an id this computer already uses for something else
+    a.newBoard(true); a.store.rename('Local, same id'); a.store.doc.id = 'in-lk-clash'; await a.persist({ force: true });
+    a.newBoard(true);
+    const link = (id, name) => ({ id: 'c-' + id, type: 'text', x: 0, y: 0, w: 300, h: 40, fontSize: 20, rotation: 0, text: 'see ' + R.refToken({ id, name }) });
+    const p = a.handleIncomingBoard({ ticket: 't-bundle-' + Date.now(), from: { deviceId: 'dev-bundle', name: 'Teacher PC' },
+      board: { id: 'in-main', name: 'Bundle main', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 },
+        objects: [link('in-lk-clash', 'Bundle linked A'), { id: 'card', type: 'boardlink', x: 0, y: 60, w: 200, h: 150, rotation: 0, board: { id: 'in-lk-b', name: 'Bundle linked B' } }],
+        linkedBoards: [
+          { id: 'in-lk-clash', name: 'Bundle linked A', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [link('in-main', 'Bundle main')] },
+          { id: 'in-lk-b', name: 'Bundle linked B', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [] }] } });
+    await new Promise((r) => setTimeout(r, 450));
+    const note = document.querySelector('#overlayCard .linked-note')?.textContent || '';
+    const questions = document.querySelectorAll('#overlayCard h3').length;
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Save it')?.click();
+    await p;
+    await new Promise((r) => setTimeout(r, 300));
+    const again = document.getElementById('overlay').classList.contains('show');
+    const list = await window.board.boards.list();
+    const byName = (n) => list.find((b) => b.name === n);
+    const main = byName('Bundle main'), A = byName('Bundle linked A'), B = byName('Bundle linked B');
+    const mainDoc = main && await window.board.boards.load(main.id), aDoc = A && await window.board.boards.load(A.id);
+    const textLinkTo = mainDoc && R.refSpans(mainDoc.objects.find((o) => o.type === 'text').text)[0]?.id;
+    const cardTo = mainDoc && mainDoc.objects.find((o) => o.type === 'boardlink')?.board.id;
+    const backTo = aDoc && R.refSpans(aDoc.objects[0].text)[0]?.id;
+    a.loadBoard = realLoad;
+    return { note, questions, again, saved: [main, A, B].filter(Boolean).length, aNewId: A && A.id !== 'in-lk-clash',
+      textOk: !!A && textLinkTo === A.id, cardOk: !!B && cardTo === B.id, backOk: !!main && backTo === main.id,
+      detail: JSON.stringify({ textLinkTo, A: A && A.id, cardTo, B: B && B.id, backTo, main: main && main.id }) };
+  `);
+  check('a board with its linked boards inside asks once, saying they come with it',
+    /2 boards it links to/.test(bundled.note) && /Bundle linked A/.test(bundled.note) && bundled.questions === 1 && bundled.again === false,
+    `note: "${bundled.note}"; questions shown: ${bundled.questions}; asked again afterwards: ${bundled.again}`);
+  check('one Save keeps them all, and links between them still land - even on a board that had to take a new id here',
+    bundled.saved === 3 && bundled.aNewId && bundled.textOk && bundled.cardOk && bundled.backOk,
+    `boards saved: ${bundled.saved} (wanted 3); the clashing one got a new id: ${bundled.aNewId}; text link ok: ${bundled.textOk}, card ok: ${bundled.cardOk}, link back ok: ${bundled.backOk} — ${bundled.detail}`);
+
+  const review = await js(String.raw`
+    const a = window.app, realLoad = a.loadBoard;
+    a.loadBoard = async () => {};
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const mk = (id, name, n = 1) => ({ id, name, schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 },
+      objects: Array.from({ length: n }, (_, i) => ({ id: id + i, type: 'note', x: i * 220, y: 0, w: 200, h: 200, color: '#ffd94a', text: name, rotation: 0 })) });
+    const from = { deviceId: 'dev-review', name: 'Student tablet' };
+    const ask = (board, ticket) => a.handleIncomingBoard({ ticket, from, board });
+    // 1. look at one larger, leave one out, save
+    let p = ask({ ...mk('rv-main', 'Review main'), linkedBoards: [mk('rv-a', 'Review A', 2), mk('rv-b', 'Review B'), mk('rv-c', 'Review C')] }, 'rv-1');
+    await wait(450);
+    const tiles = document.querySelectorAll('#overlayCard .ln-tile').length;
+    const pics = [...document.querySelectorAll('#overlayCard .ln-pic img')].filter((i) => (i.getAttribute('src') || '').startsWith('data:image')).length;
+    document.querySelectorAll('#overlayCard .ln-pic')[0].click();
+    await wait(100);
+    const big = !document.querySelector('#overlayCard .ln-view').hidden && /Review A/.test(document.querySelector('#overlayCard .ln-name')?.textContent || '');
+    document.querySelector('#overlayCard .ln-back').click();
+    const box = document.querySelectorAll('#overlayCard .ln-tile input')[1];
+    box.checked = false; box.dispatchEvent(new Event('change'));
+    const counted = document.querySelector('#overlayCard .ln-count').textContent;
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Save it').click();
+    await p; await wait(300);
+    let list = await window.board.boards.list();
+    const names = list.map((b) => b.name).filter((n) => /^Review /.test(n)).sort().join('|');
+    // 2. filed in the sender's own folder
+    const F = await import('app://board/js/core/folders.js');
+    const folderOfName = (n) => { const b = list.find((x) => x.name === n); const id = b && F.folderOf(a.settings, b.id); return id ? (a.settings.folders.find((f) => f.id === id) || {}).name : null; };
+    const where = ['Review main', 'Review A', 'Review C'].map(folderOfName).join('|');
+    const toastHasUndo = [...document.querySelectorAll('#toasts .toast')].some((t) => /Undo/.test(t.textContent) && /Student tablet/.test(t.textContent));
+    // 3. the same device, renamed, sends again: the same folder, renamed
+    const folders0 = a.settings.folders.length;
+    p = a.handleIncomingBoard({ ticket: 'rv-2', from: { deviceId: 'dev-review', name: 'Rafi tablet' }, board: mk('rv-other', 'Review other') });
+    await wait(450);
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Save it').click();
+    await p; await wait(300);
+    list = await window.board.boards.list();
+    const again = { sameFolder: folderOfName('Review other') === 'From Rafi tablet' && folderOfName('Review main') === 'From Rafi tablet', folders: a.settings.folders.length - folders0 };
+    // 4. Undo takes the arrival back
+    const undoBtn = [...document.querySelectorAll('#toasts .toast')].reverse().find((t) => /Review other/.test(t.textContent))?.querySelector('.toast-action');
+    undoBtn && undoBtn.click();
+    await wait(500);
+    list = await window.board.boards.list();
+    const undone = !list.some((b) => b.name === 'Review other') && list.some((b) => b.name === 'Review main');
+    // 5. too many at once is turned down without asking
+    const many = Array.from({ length: 51 }, (_, i) => mk('rv-m' + i, 'Many ' + i));
+    const before = list.length;
+    await ask({ ...mk('rv-flood', 'Review flood'), linkedBoards: many }, 'rv-3');
+    await wait(200);
+    list = await window.board.boards.list();
+    const flood = { asked: document.getElementById('overlay').classList.contains('show'), added: list.length - before };
+    a.loadBoard = realLoad;
+    return { tiles, pics, big, counted, names, where, toastHasUndo, again: JSON.stringify(again), undone, flood: JSON.stringify(flood) };
+  `);
+  check('arriving linked boards are each shown as a picture, can be looked at larger, and can be left out',
+    review.tiles === 3 && review.pics === 3 && review.big && /2 of 3/.test(review.counted) && review.names === 'Review A|Review C|Review main',
+    `tiles: ${review.tiles}, pictures: ${review.pics} (wanted 3 each); larger view: ${review.big}; count: "${review.counted}"; saved: ${review.names} (wanted A, C and main - B left out)`);
+  check('arrivals are filed in a folder named after the device that sent them, with Undo offered',
+    review.where === 'From Student tablet|From Student tablet|From Student tablet' && review.toastHasUndo,
+    `folders: ${review.where}; Undo in the message: ${review.toastHasUndo}`);
+  check('the same device sending again, under a new name, uses the same folder - renamed, not a second one',
+    review.again === JSON.stringify({ sameFolder: true, folders: 0 }), review.again);
+  check('Undo takes back the boards that arrival filed, and only those', review.undone === true, `undone: ${review.undone}`);
+  check('a board with more than 50 linked boards is turned down without asking, and nothing is filed',
+    review.flood === JSON.stringify({ asked: false, added: 0 }), review.flood);
+
+  const dup = await js(String.raw`
+    const a = window.app;
+    const msg = { ticket: 't-twice', from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: 'in-twice', name: 'Sent once, offered twice', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 }, objects: [] } };
+    a.queueIncomingBoard(msg);
+    a.queueIncomingBoard({ ...msg });
+    await new Promise((r) => setTimeout(r, 400));
+    const queued = a._incoming.length;
+    [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Decline')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    return { queued, again: document.getElementById('overlay').classList.contains('show') };
+  `);
+  check('the same board offered twice (as Android does when the editor reloads) is asked about once',
+    dup.queued === 0 && dup.again === false, `still queued behind it: ${dup.queued} (wanted 0); asked a second time: ${dup.again}`);
+
   await js(`window.app.settings.syncOpenOnArrival = true; window.app.saveSettings();`);
 
   /*
@@ -14695,6 +15401,17 @@ module.exports.run = async (win, app) => {
       await a.panels.boards(); await wait(150);
       await a.loadBoard({ id: 'gal-2', name: 'gal-2', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } });
       out.pageAfterLoad = a.panels.page;
+      // closing the page must not flash the side panel across the screen on its way out
+      await a.panels.boards(); await wait(200);
+      const seen = [];
+      const t0 = performance.now();
+      a.panels.close();
+      await new Promise((res) => { const tick = () => {
+        const cs = getComputedStyle(panel), r = panel.getBoundingClientRect();
+        const onScreen = cs.visibility === 'visible' && +cs.opacity > 0.05 && r.left < innerWidth - 4;
+        if (onScreen && !panel.classList.contains('page')) seen.push(Math.round(performance.now() - t0) + 'ms at x=' + Math.round(r.left) + ' opacity ' + (+cs.opacity).toFixed(2));
+        if (performance.now() - t0 < 600) requestAnimationFrame(tick); else res(); }; requestAnimationFrame(tick); });
+      out.flash = seen.slice(0, 3).join('; ');
       if (a.panels.open) a.panels.close();
       a.settings.folders = []; a.settings.boardFolders = {}; a.saveSettings();
       for (const id of ['gal-1', 'gal-2']) { try { await window.board.boards.remove(id); } catch {} }
@@ -14711,6 +15428,8 @@ module.exports.run = async (win, app) => {
     check('My boards is the full page by default, and switched off it is the plain side-panel list',
       r.defaultOn && !r.listIsPage && r.listWidth < r.winWidth / 2 && r.listRows > 0 && !r.listSide && !r.pageAfterLoad,
       `default full page ${r.defaultOn}; switched off: a page ${r.listIsPage}, ${r.listWidth}px wide of ${r.winWidth}px, ${r.listRows} board rows, side folder list ${r.listSide}; page left up after opening a board ${r.pageAfterLoad}`);
+    check('putting My boards away does not flash the side panel across the screen on its way out',
+      r.flash === '', `side panel seen on screen after the page faded: ${r.flash}`);
     check('GazBoard starts on the last board, never on My boards', !globalThis.__startedOnBoards,
       `My boards was open when the app started: ${globalThis.__startedOnBoards}`);
   }

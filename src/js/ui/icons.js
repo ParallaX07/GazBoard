@@ -69,7 +69,8 @@ const P = {
   play: 'M7.5 5.2l11 6.8-11 6.8z',
   eye: 'M2.5 12C3.8 10 7.3 6 12 6s8.2 4 9.5 6c-1.3 2-4.8 6-9.5 6s-8.2-4-9.5-6zM12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z',
   // a card lying over some lines: an answer cover
-  curtain: 'M4 4h16v6H4zM4 14h16M4 18h10M7 7h10'
+  curtain: 'M4 4h16v6H4zM4 14h16M4 18h10M7 7h10',
+  link: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1'
 };
 
 export function icon(name, size = 20, stroke = 1.6) {

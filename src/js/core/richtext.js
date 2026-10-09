@@ -24,7 +24,20 @@
 // A text with no styled run at all stores no runs, so boards that never use
 // any of this are byte-for-byte what they were.
 
-import { mathEntry, mathSpans, inlineFit } from './maths.js';
+import { mathEntry, mathSpans, inlineFit, hasMaths } from './maths.js';
+import { refSpans, refLabel, refMissing, hasRefs, refsAsWords } from './boardrefs.js';
+import { isDarkBoard } from './render.js';
+
+/** Words that need the rich path to be drawn: maths in them, or a link to a board. */
+export const needsRich = (text) => hasMaths(text) || hasRefs(text);
+
+/*
+ * Where links were drawn, for whoever asked to know. A link inside words has
+ * no object of its own, so the only way to find out where it ended up is to
+ * lay the words out again and watch: see linkRectsOf in render.js.
+ */
+let chipSink = null;
+export function watchChips(list) { chipSink = list; }
 
 const KEYS = ['b', 'i', 'u', 'c'];
 
@@ -118,7 +131,7 @@ function paragraphs(runs) {
   return paras.map((pieces) => {
     const units = [];
     for (const p of mathTokens(pieces)) {
-      if (p.math != null) {
+      if (p.math != null || p.ref) {
         // A formula is one unbreakable piece of whatever word it sits in.
         const last = units[units.length - 1];
         if (last && !last.space) last.parts.push(p);
@@ -145,7 +158,12 @@ function paragraphs(runs) {
  */
 function mathTokens(pieces) {
   const text = pieces.map((p) => p.t).join('');
-  const spans = mathSpans(text);
+  // Links to boards are cut out the same way. Where the two overlap, the one
+  // that starts first wins - nobody writes a link inside a formula.
+  const all = [...mathSpans(text), ...refSpans(text).map((r) => ({ start: r.start, end: r.end, ref: r }))]
+    .sort((a, b) => a.start - b.start);
+  const spans = [];
+  for (const sp of all) if (!spans.length || sp.start >= spans[spans.length - 1].end) spans.push(sp);
   if (!spans.length) return pieces;
   const out = [];
   let off = 0, si = 0;
@@ -157,7 +175,11 @@ function mathTokens(pieces) {
       while (si < spans.length && spans[si].end <= g) si++;
       const sp = spans[si];
       if (sp && sp.start <= g) {
-        if (g === sp.start) out.push({ t: text.slice(sp.start, sp.end), st: p.st, math: sp.tex });
+        if (g === sp.start) {
+          out.push(sp.ref
+            ? { t: refLabel(sp.ref), st: p.st, ref: sp.ref }
+            : { t: text.slice(sp.start, sp.end), st: p.st, math: sp.tex });
+        }
         a = Math.min(L, sp.end - off);
       } else {
         const stop = sp ? Math.min(L, sp.start - off) : L;
@@ -209,14 +231,15 @@ function baselineBelowTop(ctx) {
  */
 export function layoutRich(ctx, runs, maxW, base, size = base.size) {
   const widthOfText = (t, st) => { ctx.font = fontFor(effective(st, base), base, size); return ctx.measureText(t).width; };
-  const widthOf = (t, st, math) => (math != null ? mathWidth(ctx, { t, st, math }, base, size, widthOfText) : widthOfText(t, st));
+  const widthOf = (t, st, math, ref) => (ref ? widthOfText(t, st) + chipPad(size) * 2
+    : math != null ? mathWidth(ctx, { t, st, math }, base, size, widthOfText) : widthOfText(t, st));
   const lines = [];
   for (const units of paragraphs(runs)) {
     let line = [], lineW = 0, ink = false;
     const finish = () => {
       while (line.length && /^\s+$/.test(line[line.length - 1].t)) lineW -= line.pop().w;
       const last = line[line.length - 1];
-      if (last && last.math == null && /\s$/.test(last.t)) {
+      if (last && last.math == null && !last.ref && /\s$/.test(last.t)) {
         const trimmed = last.t.replace(/\s+$/, '');
         lineW -= last.w - widthOf(trimmed, last.st);
         last.t = trimmed; last.w = widthOf(trimmed, last.st);
@@ -225,7 +248,7 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
       line = []; lineW = 0; ink = false;
     };
     for (const u of units) {
-      const parts = u.parts.map((p) => ({ ...p, w: widthOf(p.t, p.st, p.math) }));
+      const parts = u.parts.map((p) => ({ ...p, w: widthOf(p.t, p.st, p.math, p.ref) }));
       const uw = parts.reduce((s, p) => s + p.w, 0);
       if (u.space) {
         if (!line.length) continue;                   // no line starts with a space
@@ -235,7 +258,7 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
       if (uw > maxW) {
         // Wider than the box on its own: letter by letter, wherever it has to.
         for (const p of parts) {
-          if (p.math != null) {                          // a formula is never cut
+          if (p.math != null || p.ref) {                 // a formula, or a link, is never cut
             if (ink && lineW + p.w > maxW) finish();
             line.push(p); lineW += p.w; ink = true;
             continue;
@@ -255,7 +278,7 @@ export function layoutRich(ctx, runs, maxW, base, size = base.size) {
   // Widths re-measured over whole merged segments, which is what is drawn.
   for (const l of lines) {
     let w = 0;
-    for (const s of l.segs) { s.w = widthOf(s.t, s.st, s.math); w += s.w; }
+    for (const s of l.segs) { s.w = widthOf(s.t, s.st, s.math, s.ref); w += s.w; }
     l.w = w;
   }
   return lines;
@@ -265,7 +288,8 @@ function mergeSegs(segs) {
   const out = [];
   for (const s of segs) {
     const last = out[out.length - 1];
-    if (last && last.math == null && s.math == null && sameStyle(last.st, s.st)) { last.t += s.t; last.w += s.w; }
+    if (last && last.math == null && !last.ref && s.math == null && !s.ref && sameStyle(last.st, s.st)) { last.t += s.t; last.w += s.w; }
+    else if (s.ref) out.push({ t: s.t, st: s.st, w: s.w, ref: s.ref });
     else out.push(s.math != null ? { t: s.t, st: s.st, w: s.w, math: s.math } : { t: s.t, st: s.st, w: s.w });
   }
   return out;
@@ -294,7 +318,7 @@ const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 const LTR = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿঀ-৿一-鿿]/;
 function rtlLine(line) {
   for (const s of line.segs) {
-    if (s.math != null) continue;
+    if (s.math != null || s.ref) continue;
     for (const ch of s.t) {
       if (RTL.test(ch)) return true;
       if (LTR.test(ch)) return false;
@@ -328,6 +352,11 @@ export function drawRichLines(ctx, lines, x, y, w, h, base, opt = {}) {
       const eff = effective(s.st, base);
       ctx.font = fontFor(eff, base, size);
       ctx.fillStyle = paint(eff.color);
+      if (s.ref) {
+        drawChip(ctx, s, lx, ty, size, opt.paper);
+        lx += s.w;
+        continue;
+      }
       if (s.math != null) {
         const e = mathEntry(s.math, paint(eff.color), opt.onload || base.onload, false);
         if (e.status === 'ready' && e.img) {
@@ -345,6 +374,43 @@ export function drawRichLines(ctx, lines, x, y, w, h, base, opt = {}) {
     ty += lh;
   }
   ctx.restore();
+}
+
+/** The room either side of a link's name, inside its pill. */
+export const chipPad = (size) => Math.max(2, size * 0.3);
+
+/** Pill colours for a link: blue when it goes somewhere, grey when its board is not here. */
+export function chipColours(missing, dark = isDarkBoard()) {
+  if (missing) return { fill: dark ? 'rgba(200,198,196,0.16)' : 'rgba(96,94,92,0.12)', ink: dark ? '#a19f9d' : '#8a8886' };
+  return { fill: dark ? 'rgba(108,184,246,0.20)' : 'rgba(0,120,212,0.12)', ink: dark ? '#8ccbff' : '#0f6cbd' };
+}
+
+/**
+ * A link inside words: its board's name on a soft pill, in the line's own
+ * font. The pill is a touch taller than the letters and sits where they do,
+ * so a line with a link in it keeps its height and its baseline.
+ */
+function drawChip(ctx, s, x, y, size, paper) {
+  const missing = refMissing(s.ref);
+  // words on a paper of their own (a note, a filled shape) keep their light-theme look
+  const col = chipColours(missing, isDarkBoard() && !paper);
+  const pad = chipPad(size);
+  const top = y - size * 0.08, h = size * 1.2;
+  ctx.save();
+  ctx.fillStyle = col.fill;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x + 1, top, Math.max(2, s.w - 2), h, Math.min(h / 2, size * 0.35)); else ctx.rect(x + 1, top, s.w - 2, h);
+  ctx.fill();
+  ctx.fillStyle = col.ink;
+  ctx.fillText(s.t, x + pad, y);
+  if (missing) ctx.fillRect(x + pad, y + size * 0.55, s.w - pad * 2, Math.max(1, size / 18));   // struck through: not here
+  ctx.restore();
+  if (chipSink) {
+    // Where it is, in whatever space the caller drew in (the board, for a probe).
+    const m = ctx.getTransform();
+    const at = (px, py) => ({ x: m.a * px + m.c * py + m.e, y: m.b * px + m.d * py + m.f });
+    chipSink.push({ ref: s.ref, quad: [at(x, top), at(x + s.w, top), at(x + s.w, top + h), at(x, top + h)] });
+  }
 }
 
 /*
@@ -424,7 +490,7 @@ export function runsToHtml(runs, text, base = {}) {
     if (eff.italic) css.push('font-style:italic');
     if (eff.underline) css.push('text-decoration:underline');
     if (eff.color) css.push('color:' + eff.color);
-    const body = escHtml(r.t).replace(/\n/g, '<br>');
+    const body = escHtml(refsAsWords(r.t)).replace(/\n/g, '<br>');
     out += css.length ? `<span style="${css.join(';')}">${body}</span>` : body;
   }
   return out;

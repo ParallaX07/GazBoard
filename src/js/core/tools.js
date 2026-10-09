@@ -2,8 +2,8 @@
 
 import { uid, bboxOfPoints, clamp, dist, simplify, unionBox } from './util.js';
 import { boundsOf, worldBounds, withAttached, withGroups} from './store.js';
-import { pick, inBox, inLasso, strokesAlong, normalizeBox, curtainAt, toLocal } from './hit.js';
-import { handlePositions, HANDLE, HANDLES, drawShape, inkPaint } from './render.js';
+import { pick, pickAll, inBox, inLasso, strokesAlong, normalizeBox, curtainAt, toLocal } from './hit.js';
+import { handlePositions, HANDLE, HANDLES, drawShape, inkPaint, linkRectsOf, inQuad } from './render.js';
 import { translateObject, scaleObject, rotateObjectAround, normalizeRect, anchorFor, CURSORS } from './transform.js';
 import { recognize, fitError, MAX_FIT_ERROR } from './recognize.js';
 import { splitStroke } from './erase.js';
@@ -319,6 +319,13 @@ export class Interaction {
      * Shift still extends a selection wherever it already did.
      */
     if ((e.ctrlKey || e.metaKey) && !this.spaceDown && e.button === 0 && !handleSelection) {
+      // Ctrl+click on a link to another board follows it, whatever is in your hand
+      const link = this.linkAt(wp);
+      if (link) {
+        this.action = null; this.actionId = null; this.cancelHold();
+        this.app.openBoardRef(link.ref);
+        return;
+      }
       const target = pick(this.store, wp, 8 / this.surface.cam.z);
       if (target) {
         this.app.chooseObject(target.id, true);
@@ -495,7 +502,14 @@ export class Interaction {
           this.action = { type: 'connectDraw', from: { ...dot.spec, x: dot.at.x, y: dot.at.y }, cur: wp, target: null, downSp: sp };
           break;
         }
+        // a click on a link to another board follows it - unless it turns into a drag
+        const link = !this.spaceDown && e.button === 0 ? this.linkAt(wp) : null;
         this.startSelect(e, sp, wp);
+        if (link && (!this.action || this.action.type === 'move')) {
+          if (!this.action) this.action = { type: 'tapped' };
+          this.action.link = link;
+          this.action.linkSp = sp;
+        }
         break;
       }
     }
@@ -508,6 +522,11 @@ export class Interaction {
     if (this.action && (tool === 'laser' || tool === 'mousePointer') && !this.spaceDown && e.button === 0) {
       this.action.cover = curtainAt(this.store, wp, 8 / this.surface.cam.z);
       this.action.downSp = sp;
+      // while presenting, a tap on a link to another board follows it
+      if (!this.action.cover && this.app.presenting) {
+        const link = this.linkAt(wp);
+        if (link) { this.action.link = link; this.action.linkSp = sp; }
+      }
     }
     // Whichever pointer began the gesture owns it until it lifts.
     this.actionId = this.action ? e.pointerId : null;
@@ -915,6 +934,14 @@ export class Interaction {
     const sp = this.surface.screenPoint(e);
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
 
+    let follow = null;
+    if (a.link && a.linkSp && Math.hypot(sp.x - a.linkSp.x, sp.y - a.linkSp.y) < TAP_SLOP) {
+      // A tap on a link: nothing moves, nothing is left selected behind - the board is opened.
+      if (a.type === 'move') { this.store.restoreSnapshot(a.snap); }
+      a.type = 'tapped';
+      follow = a.link.ref;
+    }
+
     if (a.cover && a.downSp && Math.hypot(sp.x - a.downSp.x, sp.y - a.downSp.y) < TAP_SLOP) {
       // A tap, not a drag: whatever the pointer nudged on its way down goes
       // back where it was, and the only change is the cover coming off.
@@ -987,6 +1014,20 @@ export class Interaction {
     // the next has not begun.
     this.app.onGestureEnd?.();
     this.surface.invalidate();
+    if (follow) this.app.openBoardRef(follow);
+  }
+
+  /** The link to another board under a board point: a card, or a link inside some words. */
+  linkAt(wp) {
+    // Ink and arrows drawn over a link do not hide it - a tick written on a
+    // card, or an arrow pointing at it, is no reason for it to stop working.
+    // Anything else on top of it (a note, a picture) does.
+    for (const o of pickAll(this.store, wp, 4 / this.surface.cam.z)) {
+      if (o.hidden || o.type === 'stroke' || o.type === 'connector') continue;
+      for (const r of linkRectsOf(o)) if (inQuad(r.quad, wp)) return { ref: r.ref, id: o.id };
+      return null;
+    }
+    return null;
   }
 
   /* ------------------------------------------------------------ *
@@ -1561,6 +1602,16 @@ export class Interaction {
       this.app.revealCurtain(cover.id);
       this.surface.invalidate();
       return true;
+    }
+    // While presenting, a tap on a link to another board follows it, pen in hand.
+    if (this.app.presenting) {
+      const link = this.linkAt(p0);
+      if (link) {
+        this.discardTapMark();
+        this.surface.invalidate();
+        this.app.openBoardRef(link.ref);
+        return true;
+      }
     }
     if (!finger && !selected?.size) return false;
 
@@ -2331,7 +2382,7 @@ export class Interaction {
       const hit = pick(this.store, wp, 8 / this.surface.cam.z);
       this.surface.hoverId = hit ? hit.id : null;
       if (t === 'select') this.keepDotHost(hit, wp);
-      if (t === 'select') cursor = hit ? (hit.locked ? 'not-allowed' : 'move') : 'default';
+      if (t === 'select') cursor = hit ? (this.linkAt(wp) ? 'pointer' : hit.locked ? 'not-allowed' : 'move') : 'default';
     } else this.surface.hoverId = null;
     // Moving onto or off a grouped object changes what the chrome should show,
     // and nothing else on a plain hover would ask for a repaint.

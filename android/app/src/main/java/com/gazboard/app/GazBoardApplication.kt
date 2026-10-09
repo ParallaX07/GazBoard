@@ -33,7 +33,8 @@ class GazBoardApplication : Application() {
     if (!visible) SharingService.showIncoming(this, from.str("name"))
     return try { question.answer.get(5, TimeUnit.MINUTES) }
       catch (_: Exception) { null }
-      finally { questions.remove(ticket); SharingService.clearIncoming(this) }
+      // the "board arriving" notice stays while anyone else is still waiting for an answer
+      finally { questions.remove(ticket); if (questions.isEmpty()) SharingService.clearIncoming(this) }
   }
   fun resumeQuestions() { questions.values.forEach { emit("incoming", it.message) } }
   fun answer(ticket: String, outcome: String?): Boolean = questions.remove(ticket)?.answer?.complete(outcome) ?: false

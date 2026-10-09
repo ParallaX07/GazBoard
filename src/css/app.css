@@ -360,6 +360,32 @@ input, textarea { font: inherit; }
 #boardTitle:focus { outline: none; border-color: var(--accent-2); background: var(--surface); }
 .spacer { flex: 1; min-width: 6px; }
 .badge { font-size: 11px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--stroke); padding: 3px 8px; border-radius: 20px; flex-shrink: 0; }
+#linkedFrom { cursor: pointer; font: inherit; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+#linkedFrom[hidden] { display: none; }
+#linkedFrom:hover { border-color: var(--accent); }
+.lf-pop { width: 280px; max-width: 80vw; }
+/* the boards that come along with an arriving board: each one seen, each one can be left out */
+#overlayCard .linked-note { min-width: 0; max-width: 100%; box-sizing: border-box; font-size: 13px; line-height: 1.5; padding: 10px 11px; border-radius: 8px; background: var(--accent-soft); margin: 0 0 12px; }
+#overlayCard .ln-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+#overlayCard .ln-count { flex: 1; font-weight: 600; }
+#overlayCard .ln-all { border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; padding: 2px 4px; }
+#overlayCard .ln-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; max-height: 236px; overflow-y: auto; overscroll-behavior: contain; padding: 1px; }
+#overlayCard .ln-grid[hidden], #overlayCard .ln-view[hidden] { display: none; }
+/* the larger view takes the width the question already has, never widening it */
+#overlayCard .ln-view { width: 0; min-width: 100%; }
+#overlayCard .ln-tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; cursor: pointer; }
+#overlayCard .ln-pic { padding: 0; border: 1px solid var(--stroke); border-radius: 6px; background: #fff; overflow: hidden; cursor: zoom-in; line-height: 0; }
+#overlayCard .ln-pic img { width: 100% !important; height: auto !important; display: block; border-radius: 0 !important; }
+#overlayCard .ln-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#overlayCard .ln-row input { width: 15px; height: 15px; margin: 0; flex: none; accent-color: var(--accent-2); }
+#overlayCard .ln-tname { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#overlayCard .ln-back { border: 0; background: none; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; padding: 0 0 6px; }
+#overlayCard .ln-big { max-width: 100%; border: 1px solid var(--stroke); border-radius: 6px; background: #fff; overflow: hidden; line-height: 0; }
+#overlayCard .ln-big img { width: 100% !important; height: auto !important; display: block; border-radius: 0 !important; }
+#overlayCard .ln-name { margin-top: 6px; font-weight: 600; overflow-wrap: anywhere; }
+#overlayCard .ln-hint { margin-top: 8px; color: var(--text-2); font-size: 12px; }
+#overlayCard .check-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 14px; color: var(--text); cursor: pointer; }
+#overlayCard .check-row input { width: 16px; height: 16px; accent-color: var(--accent-2); flex: none; }
 
 /* ---------------- stage ---------------- */
 #stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--surface); }
@@ -517,6 +543,41 @@ input, textarea { font: inherit; }
 .emoji-empty { padding: 14px 2px; color: var(--text-2); font-size: 13px; }
 @media (pointer: coarse) { .emoji-cell { font-size: 24px; } }
 
+/* The list after "@": other boards, narrowing as you type. */
+.bp-popover { padding: 6px; }
+.bp-pop { width: 300px; max-width: 80vw; }
+.bp-search { margin-bottom: 6px; }
+.bp-list { max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; }
+.bp-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; min-height: 40px; }
+.bp-row.hot { background: var(--accent-soft); }
+.bp-thumb { flex: none; width: 52px; height: 33px; border-radius: 5px; overflow: hidden; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--stroke); }
+.bp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bp-text { flex: 1; min-width: 0; }
+.bp-name { font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bp-path { font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bp-more { flex: none; width: 28px; height: 28px; border-radius: 6px; border: 0; background: none; color: var(--text-2); font-size: 18px; cursor: pointer; }
+.bp-more:hover { background: var(--surface); color: var(--accent); }
+/* while a board's pages are being counted: a small turning ring where the arrow will be */
+.bp-spin { flex: none; width: 14px; height: 14px; margin: 0 7px; border-radius: 50%; border: 2px solid var(--stroke); border-top-color: var(--accent); animation: bp-spin .8s linear infinite; }
+@keyframes bp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .bp-spin { animation: none; border-color: var(--accent); opacity: .5; width: 8px; height: 8px; margin: 0 10px; } }
+.bp-back { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.bp-plus { flex: none; width: 52px; height: 33px; border-radius: 5px; display: grid; place-items: center; font-size: 20px; color: var(--accent); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--stroke); }
+@media (pointer: coarse) { .bp-row { min-height: 48px; } }
+
+/* A link to a board, inside words being typed: one piece, not letters. */
+.rt .rt-ref { display: inline-block; padding: 0 .3em; border-radius: .35em; background: rgba(0,120,212,.12); color: #0f6cbd; cursor: default; user-select: all; white-space: nowrap; }
+.rt .rt-ref.missing { background: rgba(96,94,92,.12); color: #8a8886; text-decoration: line-through; }
+
+/* "Back to ..." after following a link */
+#backPill { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 30; display: none; align-items: center; gap: 6px;
+  padding: 6px 14px 6px 10px; border-radius: 999px; border: 1px solid var(--stroke); background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-3); font: inherit; font-size: 13px; cursor: pointer; max-width: min(70vw, 420px); }
+#backPill.show { display: inline-flex; }
+#backPill span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#backPill:hover { border-color: var(--accent); }
+body.presenting #backPill { top: 12px; }
+
 .menu { min-width: 240px; padding: 6px; }
 .menu-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 6px;
@@ -612,6 +673,7 @@ input, textarea { font: inherit; }
   visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s;
 }
 .panel.open { transform: none; visibility: visible; transition: transform .18s ease, visibility 0s; }
+.panel.snap { transition: none !important; }
 .panel header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--stroke); }
 .panel header h3 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
 .panel .body { flex: 1; overflow: auto; padding: 14px; }

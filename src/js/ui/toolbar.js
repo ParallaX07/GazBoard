@@ -265,7 +265,8 @@ function initPhoneToolbar(app, bar) {
       menuItem(t('Picture…'), 'image', () => app.command('insert.image')),
       menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
       menuItem(t('Table'), 'table', () => app.command('insert.table')),
-      menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain'))
+      menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain')),
+      menuItem(t('Link to a board…'), 'link', () => app.command('insert.boardlink'))
     ), { key: 'add' });
   });
 
@@ -721,6 +722,7 @@ export function openInsertPopover(app, anchor) {
     menuItem(t('Table'), 'table', () => app.command('insert.table')),
     menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
     menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain')),
+    menuItem(t('Link to a board…'), 'link', () => app.command('insert.boardlink'), { key: '@' }),
     h('div', { class: 'menu-sep' }),
     menuItem(t('Paste from clipboard'), 'copy', () => app.command('edit.paste'), { key: 'Ctrl+V' }),
     menuItem(t('Templates…'), 'template', () => app.panels.templates())

@@ -9,7 +9,9 @@
 import { boundsOf } from '../core/store.js';
 import { fitFontSize, readableText, wrapText, clamp } from '../core/util.js';
 import { faceOf, noteTypeRange, inkPaint } from '../core/render.js';
-import { objectRuns, normalizeRuns, layoutRich, fitRichSize, htmlToRuns } from '../core/richtext.js';
+import { objectRuns, normalizeRuns, layoutRich, fitRichSize, htmlToRuns, needsRich } from '../core/richtext.js';
+import { refSpans, refToken, refLabel, refMissing } from '../core/boardrefs.js';
+import { openBoardPicker } from './boardpicker.js';
 import { updateSelectionBar } from './contextmenu.js';
 import { t } from '../i18n.js';
 
@@ -31,7 +33,10 @@ function flatten(root, keepTail = false) {
       if (ch.nodeType === 3) {
         if (ch.data) { items.push({ kind: 'text', node: ch, from: pos, to: pos + ch.data.length }); pos += ch.data.length; }
       } else if (ch.nodeType === 1) {
-        if (ch.tagName === 'BR') { items.push({ kind: 'br', node: ch, from: pos, to: pos + 1 }); pos += 1; }
+        // a link to a board is one piece, whatever its label says: its text is the link itself
+        const ref = ch.getAttribute && ch.getAttribute('data-ref');
+        if (ref) { items.push({ kind: 'ref', node: ch, token: ref, from: pos, to: pos + ref.length }); pos += ref.length; }
+        else if (ch.tagName === 'BR') { items.push({ kind: 'br', node: ch, from: pos, to: pos + 1 }); pos += 1; }
         else {
           if (BLOCK.has(ch.tagName) && pos > 0 && items.length && items[items.length - 1].kind !== 'br') {
             items.push({ kind: 'block', node: ch, from: pos, to: pos + 1 }); pos += 1;
@@ -49,7 +54,7 @@ function flatten(root, keepTail = false) {
 
 function plainOf(root) {
   let s = '';
-  for (const it of flatten(root)) s += it.kind === 'text' ? it.node.data : '\n';
+  for (const it of flatten(root)) s += it.kind === 'text' ? it.node.data : it.kind === 'ref' ? it.token : '\n';
   return s;
 }
 
@@ -116,9 +121,10 @@ function runsOf(root, paint = (c) => c) {
   const autoShown = (/^#[0-9a-f]{6}$/i.test(shown) ? shown.toLowerCase() : toHex(shown)) || '#201f1e';
   const runs = [];
   for (const it of flatten(root)) {
-    if (it.kind !== 'text') { runs.push({ t: '\n' }); continue; }
-    const l = looksOf(it.node.parentElement, root);
-    const r = { t: it.node.data };
+    if (it.kind !== 'text' && it.kind !== 'ref') { runs.push({ t: '\n' }); continue; }
+    // a link takes the look of the words it sits in; its own blue is only how it is shown
+    const l = looksOf(it.kind === 'ref' ? (it.node.parentElement || root) : it.node.parentElement, root);
+    const r = { t: it.kind === 'ref' ? it.token : it.node.data };
     if (l.bold !== base.bold) r.b = l.bold ? 1 : 0;
     if (l.italic !== base.italic) r.i = l.italic ? 1 : 0;
     if (l.under !== base.under) r.u = l.under ? 1 : 0;
@@ -144,13 +150,34 @@ function fill(root, runs, text, paint = (c) => c) {
     }
     String(r.t).split('\n').forEach((piece, i) => {
       if (i) into.appendChild(document.createElement('br'));
-      if (piece) into.appendChild(document.createTextNode(piece));
+      if (piece) appendWithLinks(into, piece);
     });
   }
   // An empty last line needs something for the caret to stand on.
   if (/\n$/.test(runsTextOf(list))) root.appendChild(document.createElement('br'));
 }
 const runsTextOf = (list) => list.map((r) => r.t).join('');
+
+/** A link to a board as it sits among the words being typed: its name, as one piece. */
+export function linkChip(ref) {
+  const el = document.createElement('span');
+  el.className = 'rt-ref' + (refMissing(ref) ? ' missing' : '');
+  el.contentEditable = 'false';
+  el.setAttribute('data-ref', refToken(ref));
+  el.textContent = refLabel(ref);
+  return el;
+}
+
+/** Words into the box, with each link in them made into one piece. */
+function appendWithLinks(into, text) {
+  let at = 0;
+  for (const sp of refSpans(text)) {
+    if (sp.start > at) into.appendChild(document.createTextNode(text.slice(at, sp.start)));
+    into.appendChild(linkChip(sp));
+    at = sp.end;
+  }
+  if (at < text.length) into.appendChild(document.createTextNode(text.slice(at)));
+}
 
 /** Make an editable div answer the questions a textarea used to. */
 function textareaFace(el) {
@@ -258,7 +285,7 @@ export class TextEditor {
 
     this.place();
 
-    ta.addEventListener('input', () => { this.place(); app.surface.invalidate(); });
+    ta.addEventListener('input', () => { this.place(); app.surface.invalidate(); this.watchMention(); });
     /*
      * Words come in with the look the board can draw, and nothing else.
      *
@@ -314,6 +341,8 @@ export class TextEditor {
     });
     ta.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      // the list of boards after "@" has first say over the keys it moves through
+      if (this.mention?.open && !e.isComposing && this.mention.key(e)) { e.preventDefault(); return; }
       // Ctrl+Shift+V: the words only, whatever they looked like where they came from.
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'V' || e.key === 'v')) this._plainPaste = true;
       if (e.key === 'Escape') { e.preventDefault(); this.cancel(); app.surface.canvas.focus(); }
@@ -325,7 +354,7 @@ export class TextEditor {
       else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.commit(); }
       else if (e.key === 'Tab' && cell) { e.preventDefault(); this.commit(); }
     });
-    ta.addEventListener('blur', () => this.commit());
+    ta.addEventListener('blur', () => { if (!this._picking) this.commit(); });
     // The format bar shows what the caret is sitting in.
     this._onSel = () => { if (this.el && document.activeElement === this.el) updateSelectionBar(app, true); };
     document.addEventListener('selectionchange', this._onSel);
@@ -493,6 +522,7 @@ export class TextEditor {
 
   commit() {
     if (!this.el || !this.target) return;
+    this.endMention();
     const value = this.el.value;
     // Read while the box is still on the page: the styles are read off it.
     const runs = this.runs();
@@ -571,6 +601,7 @@ export class TextEditor {
    * gives a short label a selection frame several times its own width.
    */
   fitBox(o, value, wrapW = this.wrapW, runs = null) {
+    if (!runs && needsRich(value)) runs = [{ t: value }];
     const size = o.fontSize || 24;
     const family = faceOf(o.font);
     this.measure.font = `${o.bold ? '600 ' : ''}${size}px ${family}`;
@@ -600,6 +631,7 @@ export class TextEditor {
    * the size they gave it.
    */
   noteHeight(o, value, baseH = o.h, runs = null) {
+    if (!runs && needsRich(value)) runs = [{ t: value }];
     const pad = Math.max(10, o.w * 0.08);
     const innerW = Math.max(8, o.w - pad * 2);
     const face = faceOf(o.font);
@@ -624,6 +656,7 @@ export class TextEditor {
 
   cancel() {
     if (!this.el) return;
+    this.endMention();
     const target = this.target;
     const el = this.el;
     /*
@@ -656,6 +689,73 @@ export class TextEditor {
   }
 
   reposition() { if (this.el) this.place(); }
+
+  /*
+   * "@" followed by a few words, right before the caret, is a search for a
+   * board. It has to start a word - "me@home.com" is an address, not a link -
+   * and it gives up at a new line, at a second "@", or after forty letters.
+   */
+  mentionQuery() {
+    if (!this.el) return null;
+    const s = document.getSelection();
+    if (!s || !s.rangeCount || !s.isCollapsed) return null;
+    const caret = this.el.selectionStart;
+    const before = this.el.value.slice(0, caret);
+    const m = /(^|[\s(\[{"'“‘])@([^@\n]{0,40})$/.exec(before);
+    // "@[" is a link already made, not a search
+    if (!m || /\s\s$/.test(m[2]) || /^[\s[]/.test(m[2])) return null;
+    return { at: caret - m[2].length - 1, caret, query: m[2] };
+  }
+
+  watchMention() {
+    const q = this.mentionQuery();
+    if (!q) { this.endMention(); return; }
+    this._mentionAt = q;
+    if (this.mention?.open) { this.mention.setQuery(q.query); return; }
+    const r = document.getSelection().getRangeAt(0).cloneRange();
+    let box = r.getBoundingClientRect();
+    if (!box || (!box.width && !box.height && !box.left)) box = this.el.getBoundingClientRect();
+    this.app.refreshBoardDirectory?.();
+    this.mention = openBoardPicker(this.app, {
+      at: { x: box.left - 8, y: box.bottom + 6 },
+      query: q.query,
+      onPick: (ref) => this.pickMention(ref),
+      onClose: () => { this.mention = null; }
+    });
+  }
+
+  endMention() {
+    const m = this.mention;
+    this.mention = null;
+    if (m?.open) m.close();
+  }
+
+  /** Swap the "@words" just typed for a link to the board chosen (made first, when asked for). */
+  async pickMention(choice) {
+    const at = this._mentionAt;
+    this.mention = null;
+    if (!this.el || !at) return;
+    let ref = choice;
+    if (choice.create) {
+      this._picking = true;
+      try { ref = await this.app.createLinkedBoard(choice.create); } finally { this._picking = false; }
+      if (!ref || !this.el) return;
+    }
+    this.el.focus();
+    this.el.setSelectionRange(at.at, at.caret);
+    const sel = document.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    // the link, then a space, with the caret after the space ready for the next word
+    const chip = linkChip(ref), space = document.createTextNode(' ');
+    range.insertNode(space);
+    range.insertNode(chip);
+    const after = document.createRange();
+    after.setStart(space, 1); after.collapse(true);
+    sel.removeAllRanges(); sel.addRange(after);
+    this.el.dispatchEvent(new Event('input'));
+  }
 
   stopWatching() {
     if (this._onSel) document.removeEventListener('selectionchange', this._onSel);

@@ -457,6 +457,7 @@ function buildMenu() {
         { label: T('Insert image…'), click: cmd('insert.image') },
         { label: T('Insert document (Word / PowerPoint / PDF)…'), click: cmd('insert.document') },
         { label: T('Insert answer cover'), click: cmd('insert.curtain') },
+        { label: T('Insert link to a board…'), click: cmd('insert.boardlink') },
         { type: 'separator' },
         { label: T('Export as PNG…'), click: cmd('export.png') },
         { label: T('Export as PDF…'), click: cmd('export.pdf') },

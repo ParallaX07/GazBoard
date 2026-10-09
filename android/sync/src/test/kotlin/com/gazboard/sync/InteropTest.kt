@@ -76,6 +76,33 @@ class InteropTest {
       }
     }
   }
+  @Test fun `Boards from several senders all arrive while the first question is still unanswered`() {
+    // a phone at the front of a classroom: three students press Send at once
+    val asked = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val allThere = java.util.concurrent.CountDownLatch(3)
+    val teacher = LanNode(Protocol.deviceId(), "Teacher", MemoryPairs(), { board, _ ->
+      asked.add(board.str("name")); allThere.countDown()
+      // nobody answers until every student's board has reached the phone
+      if (allThere.await(20, java.util.concurrent.TimeUnit.SECONDS)) "saved" else null
+    }, host = "127.0.0.1", preferredPort = 0, discoveryPort = 0)
+    val students = (1..3).map { LanNode(Protocol.deviceId(), "Student $it", MemoryPairs(), { _, _ -> null }, host = "127.0.0.1", preferredPort = 0, discoveryPort = 0) }
+    try {
+      teacher.start(); students.forEach { it.start() }
+      val target = json("deviceId" to teacher.deviceId, "address" to "127.0.0.1", "port" to teacher.port)
+      students.forEach { student -> val room = teacher.beginPairing(); student.pairWith(target, room.str("code")) }
+      val results = java.util.concurrent.ConcurrentHashMap<String, String>()
+      val threads = students.mapIndexed { i, student -> Thread {
+        results["Board ${i + 1}"] = runCatching { student.send(target, json("name" to "Board ${i + 1}", "objects" to listOf<JsonObject>())).str("outcome") }
+          .getOrElse { "failed: " + it.message }
+      }.apply { start() } }
+      threads.forEach { it.join(30_000) }
+      assertEquals(listOf("Board 1", "Board 2", "Board 3"), asked.sorted(),
+        "boards that reached the phone: $asked; what each student saw: $results")
+      assertEquals(mapOf("Board 1" to "saved", "Board 2" to "saved", "Board 3" to "saved"), results.toSortedMap(),
+        "what each student saw: $results; boards that reached the phone: $asked")
+      assertEquals(0L, teacher.waitingBytes(), "bytes still held after every question was answered: ${teacher.waitingBytes()}")
+    } finally { students.forEach { it.close() }; teacher.close() }
+  }
   @Test fun `Desktop initiates pairing and temporary pairs end on both sides`() {
     val pairs = MemoryPairs()
     LanNode(Protocol.deviceId(), "Android", pairs, { _, _ -> "saved" }, host = "127.0.0.1", preferredPort = 0, discoveryPort = 0).use { android ->
