@@ -4124,6 +4124,10 @@ class App {
       this.panels.syncChanged();
     });
     window.board.sync.onIncoming((msg) => this.queueIncomingBoard(msg));
+    // Android: a board that reached the phone but could not be handed to the page. Never silently.
+    window.board.sync.onIncomingFailed?.((info) => {
+      this.toast(t('A board from {name} arrived but could not be opened here: {error}', { name: (info && info.name) || t('another computer'), error: (info && info.error) || '?' }), 'help', 12000);
+    });
     if (window.board.sync.onReceiving) {
       window.board.sync.onReceiving((info) => { this._receivingAt = performance.now(); this.showReceiving(info); });
     }

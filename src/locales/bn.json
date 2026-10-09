@@ -1015,6 +1015,7 @@
  "This board links to another board": "এই বোর্ডে আরেকটা বোর্ডের লিংক আছে",
  "This board links to {n} other boards": "এই বোর্ডে আরও {n}টি বোর্ডের লিংক আছে",
  "Send them along, so the links work on the other computer.": "সেগুলোও সাথে পাঠান, যাতে অন্য কম্পিউটারেও লিংকগুলো কাজ করে।",
+ "A board from {name} arrived but could not be opened here: {error}": "{name} থেকে একটা বোর্ড এসেছে, কিন্তু এখানে খোলা গেল না: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "সেগুলোও সাথে সেভ করুন, যাতে যেখানেই খোলা হোক লিংকগুলো কাজ করে। সবগুলো একটা .zip ফাইলে যাবে।",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "এই বোর্ডের পরে সেগুলো PDF-এ রাখুন, আর কোনো লিংকে ক্লিক করলে সেই বোর্ডে চলে যাবে।",
  "Put them in the picture under this board, and a click on a link shows the board it names.": "এই বোর্ডের নিচে ছবিতে সেগুলো রাখুন, আর কোনো লিংকে ক্লিক করলে সেই বোর্ডটি দেখাবে।",

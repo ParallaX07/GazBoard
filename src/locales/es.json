@@ -1015,6 +1015,7 @@
  "This board links to another board": "Este tablero enlaza con otro tablero",
  "This board links to {n} other boards": "Este tablero enlaza con otros {n} tableros",
  "Send them along, so the links work on the other computer.": "Envíalos también, para que los enlaces funcionen en el otro equipo.",
+ "A board from {name} arrived but could not be opened here: {error}": "Llegó un tablero de {name}, pero no se pudo abrir aquí: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "Guárdalos con él, para que los enlaces funcionen dondequiera que se abra. Van juntos en un único archivo .zip.",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "Ponlos en el PDF después de este tablero, y un clic en un enlace salta al tablero que nombra.",
  "Put them in the picture under this board, and a click on a link shows the board it names.": "Ponlos en la imagen debajo de este tablero, y un clic en un enlace muestra el tablero que nombra.",

@@ -226,3 +226,29 @@ test('A clipboard Android refuses is reported as not copied, never as a crash', 
   try { got = await adapter.clipboardWrite({ text: 'x' }); } catch (e) { got = 'threw: ' + e.message; }
   assert.equal(got, false, `the app shows "Could not copy to the clipboard" on false; got ${JSON.stringify(got)}`);
 });
+
+test('A board that arrives as a file reaches the page, and one that cannot be read is reported and answered', async () => {
+  const { adapter, calls, native } = await setup(async () => true);
+  const board = { ticket: 'tk1', board: { name: 'With links', objects: [], linkedBoards: [{ name: 'L1', objects: [] }] }, from: { name: 'Laptop' } };
+  const served = {};
+  global.fetch = async (url) => {
+    const token = String(url).split('/').pop();
+    if (!served[token]) return { ok: false, json: async () => null };
+    return { ok: true, json: async () => served[token] };
+  };
+  const got = [], failed = [];
+  adapter.sync.onIncoming((m) => got.push(m));
+  adapter.sync.onIncomingFailed((m) => failed.push(m));
+  const good = 'a'.repeat(32), gone = 'b'.repeat(32);
+  served[good] = board;
+  await native.onmessage({ data: JSON.stringify({ event: 'incoming', ticket: 'tk1', from: 'Laptop', resultFile: good }) });
+  assert.equal(got.length, 1, `boards handed to the page: ${got.length}`);
+  assert.equal(got[0].board.linkedBoards.length, 1, `linked boards inside: ${JSON.stringify(got[0].board)}`);
+  await native.onmessage({ data: JSON.stringify({ event: 'incoming', ticket: 'tk2', from: 'Laptop', resultFile: gone }) });
+  await new Promise((r) => setTimeout(r, 20));
+  const answered = calls.filter((c) => c.method === 'sync:answer').map((c) => c.args);
+  assert.deepEqual({ failed: failed.map((f) => f.ticket + ':' + f.name), answered },
+    { failed: ['tk2:Laptop'], answered: [{ ticket: 'tk2', outcome: null }] },
+    `reported: ${JSON.stringify(failed)}; answers sent to the sender: ${JSON.stringify(answered)}`);
+  delete global.fetch;
+});

@@ -45,7 +45,28 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
   }
   fun dispose() { disposed = true; reply = null }
   fun event(name: String, result: JsonElement) {
-    app.io.execute { runCatching { respond(json("event" to name), result) } }
+    app.io.execute {
+      if (name != "incoming") { runCatching { respond(json("event" to name), result) }; return@execute }
+      /*
+       * A board arriving is a question somebody is waiting on. It used to be
+       * dropped without a word if it could not be handed to the page - too
+       * big to copy, say - and the sender sat on "waiting for an answer" with
+       * nothing on this screen. Now it goes over as a file, and if even that
+       * fails the page is told, and so is the sender.
+       */
+      val message = result as? JsonObject
+      val ticket = message?.str("ticket").orEmpty()
+      val from = (message?.get("from") as? JsonObject)?.str("name").orEmpty()
+      try {
+        val header = json("event" to name, "ticket" to ticket, "from" to from)
+        val token = app.files.putJson(result, 128000) { text -> post(header.with("result" to parse(text))) }
+        if (token != null) post(header.with("resultFile" to token))
+      } catch (e: Throwable) {
+        post(json("event" to "incomingFailed", "result" to json("ticket" to ticket, "name" to from,
+          "error" to (e.message ?: e.javaClass.simpleName))))
+        if (ticket.isNotEmpty()) app.answer(ticket, null)
+      }
+    }
   }
   private fun respond(header: JsonObject, result: Any?) {
     val value = value(result)

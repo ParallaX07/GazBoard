@@ -374,7 +374,7 @@ export function connectorSvg(o) {
 /**
  * The thing an arrow end dropped at `p` would hold on to, as an end spec
  * ({ id } or { group }), or null. The topmost thing whose box the point is in
- * (with a little slack), never another arrow and never a lifted cover. A
+ * (with a little slack), never another arrow, a lifted cover or loose ink. A
  * member of a group gives the whole group, unless that group is open for
  * editing, which is the one time its members are separate things.
  */
@@ -383,6 +383,9 @@ export function targetAt(s, p, slack = 8, { except = null, openGroup = null } = 
   for (let i = order.length - 1; i >= 0; i--) {
     const o = s.doc.objects[order[i]];
     if (!o || o.type === 'connector' || gone(o) || o.id === except) continue;
+    // Handwriting is not a thing to point at: an arrow drawn past some ink
+    // must not grab it. Ink grouped with other things is part of that group.
+    if (o.type === 'stroke' && !(o.groupId && o.groupId !== openGroup)) continue;
     const b = worldBounds(o);
     if (p.x < b.x - slack || p.x > b.x + b.w + slack || p.y < b.y - slack || p.y > b.y + b.h + slack) continue;
     if (o.groupId && o.groupId !== openGroup) return { group: o.groupId };

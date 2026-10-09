@@ -1146,7 +1146,7 @@ export class Interaction {
   arrowDots() {
     if (this.tool !== 'select' || this.action) return null;
     const sel = this.surface.selection;
-    const usable = (x) => x && x.type !== 'connector' && x.type !== 'curtain' && !x.hidden && !x.locked;
+    const usable = (x) => x && x.type !== 'connector' && x.type !== 'curtain' && !x.hidden && !x.locked && !this.looseInk(x);
     let o = this.surface.hoverId ? this.store.get(this.surface.hoverId) : null;
     if (!usable(o)) o = this._dotHost ? this.store.get(this._dotHost) : null;
     if (!usable(o)) o = null;
@@ -1157,7 +1157,7 @@ export class Interaction {
       if (objs.length === 1 || (gid && objs.every((x) => x.groupId === gid))) { o = objs[0]; selected = true; }
     } else if (o && sel.has(o.id)) selected = true;
     // a locked page is something to point AT, not something to pull arrows out of every time it is hovered
-    if (!o || o.type === 'connector' || o.type === 'curtain' || o.hidden || o.locked) return null;
+    if (!o || o.type === 'connector' || o.type === 'curtain' || o.hidden || o.locked || this.looseInk(o)) return null;
     const spec = o.groupId && o.groupId !== this.app.openGroup ? { group: o.groupId } : { id: o.id };
     const box = endBox(spec);
     if (!box) return null;
@@ -1178,7 +1178,12 @@ export class Interaction {
     const gid = objs[0]?.groupId;
     if (!(objs.length === 1 || (gid && objs.every((x) => x.groupId === gid)))) return false;
     const o = objs[0];
-    return o.type !== 'connector' && o.type !== 'curtain' && !o.hidden && !o.locked;
+    return o.type !== 'connector' && o.type !== 'curtain' && !o.hidden && !o.locked && !this.looseInk(o);
+  }
+
+  /** Pen or highlighter ink on its own - not something arrows hold on to. Grouped, it is part of its group. */
+  looseInk(o) {
+    return !!o && o.type === 'stroke' && !(o.groupId && o.groupId !== this.app.openGroup);
   }
 
   /** The arrow dot under a screen point, if any. */
@@ -1202,7 +1207,7 @@ export class Interaction {
    */
   keepDotHost(hit, wp) {
     const was = this._dotHost;
-    if (hit && hit.type !== 'connector' && hit.type !== 'curtain') this._dotHost = hit.id;
+    if (hit && hit.type !== 'connector' && hit.type !== 'curtain' && !this.looseInk(hit)) this._dotHost = hit.id;
     else if (this._dotHost) {
       const o = this.store.get(this._dotHost);
       const box = o ? endBox(o.groupId && o.groupId !== this.app.openGroup ? { group: o.groupId } : { id: o.id }) : null;

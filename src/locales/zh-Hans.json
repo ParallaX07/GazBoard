@@ -1015,6 +1015,7 @@
  "This board links to another board": "此白板链接到另一个白板",
  "This board links to {n} other boards": "此白板链接到另外 {n} 个白板",
  "Send them along, so the links work on the other computer.": "把它们一起发送，这样链接在另一台电脑上也能用。",
+ "A board from {name} arrived but could not be opened here: {error}": "来自 {name} 的白板已到达，但无法在这里打开：{error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "把它们一起保存，这样无论在哪里打开，链接都能用。它们会一起放进一个 .zip 文件。",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "把它们放进 PDF，排在这个白板之后，点击链接即可跳到它指向的白板。",
  "Put them in the picture under this board, and a click on a link shows the board it names.": "把它们放进图片，排在这个白板下方，点击链接即可显示它指向的白板。",

@@ -40,7 +40,16 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     try {
       message = JSON.parse(data);
       if (message.event) {
-        const payload = message.resultFile ? await file(message.resultFile, true) : message.result;
+        let payload;
+        try { payload = message.resultFile ? await file(message.resultFile, true) : message.result; }
+        catch (e) {
+          // A board that arrived but cannot be read here must not vanish: say so, and let the sender know
+          if (message.event === 'incoming') {
+            if (message.ticket) raw('sync:answer', { ticket: message.ticket, outcome: null }).catch(() => {});
+            await emit('incomingFailed', { ticket: message.ticket || '', name: message.from || '', error: e.message || String(e) });
+          }
+          throw e;
+        }
         await emit(message.event, payload);
         if (message.event === 'flush') await raw('app:flushed', { ticket: payload?.ticket });
         return;
@@ -176,6 +185,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       onPeers: (cb) => on('peers', cb),
       onReceiving: (cb) => on('receiving', cb),
       onIncoming: (cb) => on('incoming', cb),
+      onIncomingFailed: (cb) => on('incomingFailed', cb),
       onSendProgress: (cb) => on('sendProgress', cb),
       answer: (ticket, outcome) => call('sync:answer', { ticket, outcome })
     },

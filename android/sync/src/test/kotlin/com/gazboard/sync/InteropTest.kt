@@ -103,6 +103,25 @@ class InteropTest {
       assertEquals(0L, teacher.waitingBytes(), "bytes still held after every question was answered: ${teacher.waitingBytes()}")
     } finally { students.forEach { it.close() }; teacher.close() }
   }
+  @Test fun `A board with its linked boards inside arrives whole from the desktop`() {
+    val incoming = mutableListOf<JsonObject>()
+    LanNode(Protocol.deviceId(), "Android", MemoryPairs(), { board, _ -> incoming.add(board); "kept-both;linked=2" }, host = "127.0.0.1", preferredPort = 0, discoveryPort = 0).use { android ->
+      Desktop().use { desktop ->
+        android.start(); desktop.call("start")
+        val room = android.beginPairing()
+        val target = json("deviceId" to android.deviceId, "address" to "127.0.0.1", "port" to android.port)
+        desktop.call("pair", json("peer" to target, "code" to room.str("code")))
+        val picture = "data:image/png;base64," + Protocol.b64(Protocol.bytes(3 * 1024 * 1024))
+        fun board(id: String) = json("id" to id, "name" to "ছড়ার ক্লাস $id", "objects" to listOf(json("id" to "$id-img", "type" to "image", "src" to picture)))
+        val bundle = board("main").with("linkedBoards" to listOf(board("l1"), board("l2")))
+        val reply = desktop.call("send", json("peer" to target, "board" to bundle)).obj()
+        assertEquals("kept-both;linked=2", reply.str("outcome"), "the desktop was told: $reply")
+        val got = incoming.singleOrNull()
+        assertNotNull(got, "boards that reached Android: ${incoming.size}")
+        assertEquals(bundle, got, "linked boards that came inside: ${(got["linkedBoards"] as? JsonArray)?.size}")
+      }
+    }
+  }
   @Test fun `Desktop initiates pairing and temporary pairs end on both sides`() {
     val pairs = MemoryPairs()
     LanNode(Protocol.deviceId(), "Android", pairs, { _, _ -> "saved" }, host = "127.0.0.1", preferredPort = 0, discoveryPort = 0).use { android ->

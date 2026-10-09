@@ -7089,13 +7089,17 @@ async function run(win, app) {
     add({ id: 'tInk', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none', points: pts, bbox: { x: 700, y: 400, w: 160, h: 40 }, rotation: 0 });
     rect('gA', 100, 700, 80, 60, { groupId: 'G1' }); rect('gB', 200, 700, 80, 60, { groupId: 'G1' });
     rect('locked', 400, 650, 300, 200, { locked: true });
+    // ink grouped with something else is part of that group, and the group is held on to
+    const gpts = pts.map((q) => ({ ...q, x: q.x + 100, y: q.y + 500 }));
+    add({ id: 'gInk', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none', points: gpts, bbox: { x: 800, y: 900, w: 160, h: 40 }, rotation: 0, groupId: 'G2' });
+    rect('gC', 1000, 890, 60, 60, { groupId: 'G2' });
     const at = (x, y) => JSON.stringify(t.targetAt(a.store, { x, y }, 8));
     r.found = {
       shape: at(180, 150), note: at(490, 170), text: at(780, 120), math: at(180, 430),
-      image: at(480, 460), ink: at(780, 420), group: at(140, 730), locked: at(550, 750), empty: at(1000, 1000)
+      image: at(480, 460), ink: at(780, 420), groupedInk: at(880, 920), group: at(140, 730), locked: at(550, 750), empty: at(1000, 1000)
     };
     r.allFound = r.found.shape.includes('tShape') && r.found.note.includes('tNote') && r.found.text.includes('tText') &&
-      r.found.math.includes('tMath') && r.found.image.includes('tImg') && r.found.ink.includes('tInk') &&
+      r.found.math.includes('tMath') && r.found.image.includes('tImg') && r.found.ink === 'null' && r.found.groupedInk.includes('"group":"G2"') &&
       r.found.group.includes('"group":"G1"') && r.found.locked.includes('locked') && r.found.empty === 'null';
     // an arrow to the group runs to the edge of the whole group, not one member
     const c = a.addConnector({ id: 'tShape' }, { group: 'G1' }, { route: 'straight' });
@@ -7104,11 +7108,18 @@ async function run(win, app) {
     r.groupOk = g.attachedB && g.b.y < 700 && g.b.y > 690;
     // an arrow never holds on to another arrow
     r.notArrow = JSON.stringify(t.targetAt(a.store, { x: g.a.x + (g.b.x - g.a.x) / 2, y: g.a.y + (g.b.y - g.a.y) / 2 }, 2));
+    // selected ink on its own offers no dots to pull an arrow out of; a shape still does
+    a.setTool('select');
+    a.setSelection(['tInk']); r.inkDots = !!a.interaction.arrowDots();
+    a.setSelection(['tShape']); r.shapeDots = !!a.interaction.arrowDots();
+    a.setSelection([]);
     a.store.clear();
     return r;
   `);
-  check('arrows: hold on to shapes, notes, text, maths, pictures, handwriting, groups and locked pages - and nothing in empty space',
-    arrowTargets.allFound, JSON.stringify(arrowTargets.found));
+  check('arrows: hold on to shapes, notes, text, maths, pictures, groups and locked pages - not loose handwriting (only as part of a group), and nothing in empty space',
+    arrowTargets.allFound, JSON.stringify(arrowTargets.found) + ' (wanted ink: null, groupedInk: group G2)');
+  check('arrows: selected ink on its own shows no arrow dots, a selected shape still does',
+    arrowTargets.inkDots === false && arrowTargets.shapeDots === true, `dots on ink: ${arrowTargets.inkDots} (wanted false), on a shape: ${arrowTargets.shapeDots} (wanted true)`);
   check('arrows: an arrow to a group runs to the edge of the whole group; arrows never grab other arrows',
     arrowTargets.groupOk && !/"id":"c/.test(arrowTargets.notArrow), `group end at ${arrowTargets.groupEnd} (wanted just above y=700); what the arrow's own middle offers: ${arrowTargets.notArrow}`);
 

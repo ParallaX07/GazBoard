@@ -1015,6 +1015,7 @@
  "This board links to another board": "هذه اللوحة فيها رابط إلى لوحة أخرى",
  "This board links to {n} other boards": "هذه اللوحة فيها روابط إلى {n} لوحات أخرى",
  "Send them along, so the links work on the other computer.": "أرسلها معها، لتعمل الروابط على الكمبيوتر الآخر.",
+ "A board from {name} arrived but could not be opened here: {error}": "وصلت لوحة من {name} لكن تعذّر فتحها هنا: {error}",
  "Save them with it, so the links work wherever it is opened. They go into one .zip file together.": "احفظها معها، لتعمل الروابط أينما فُتحت. تُحفظ كلها معًا في ملف ‎.zip‎ واحد.",
  "Put them in the PDF after this board, and a click on a link jumps to the board it names.": "ضعها في ملف PDF بعد هذه اللوحة، والنقر على رابط ينقلك إلى اللوحة التي يسمّيها.",
  "Put them in the picture under this board, and a click on a link shows the board it names.": "ضعها في الصورة أسفل هذه اللوحة، والنقر على رابط يعرض اللوحة التي يسمّيها.",

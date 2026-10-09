@@ -12,6 +12,10 @@ import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.encodeToStream
 
 /** Files are capabilities, never renderer-supplied filesystem paths. */
 class BridgeFiles(private val context: Context) {
@@ -65,6 +69,29 @@ class BridgeFiles(private val context: Context) {
     val token = begin(bytes.size.toLong())
     try { blobs[token]!!.file.writeBytes(bytes); finish(token); return token }
     catch (e: Exception) { release(token); throw e }
+  }
+  /**
+   * Write JSON straight into a temporary file, never holding it as one long
+   * string - a board with its linked boards and their pictures can be tens of
+   * megabytes, and three copies of that at once is how a phone runs out of
+   * memory. Returns the token, or null if it came to `inlineBelow` bytes or
+   * fewer, in which case `small` gets the text to send inline instead.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  fun putJson(element: JsonElement, inlineBelow: Int, small: (String) -> Unit): String? {
+    val token = Protocol.deviceId()
+    val file = File(root, token)
+    try {
+      file.outputStream().buffered().use { Json.encodeToStream(JsonElement.serializer(), element, it) }
+      val size = file.length()
+      if (size <= inlineBelow) { small(file.readText()); file.delete(); return null }
+      require(size <= MAX_BYTES) { "This board is larger than 128 MB" }
+      synchronized(this) {
+        require(blobs.size < 32) { "Temporary file limit reached" }
+        blobs[token] = Blob(file, size, complete = true)
+      }
+      return token
+    } catch (e: Throwable) { file.delete(); throw e }
   }
   fun copy(input: InputStream): String {
     val target = File(root, Protocol.deviceId())
