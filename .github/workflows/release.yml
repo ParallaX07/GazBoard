@@ -132,6 +132,9 @@ jobs:
           # SHA-256 of appimagetool-x86_64.AppImage for the version above.
           # Bump both together and recompute with: sha256sum <downloaded file>
           APPIMAGETOOL_SHA256: '46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1'
+          # Pin the runtime too; update its SHA-256 when changing the version.
+          APPIMAGE_RUNTIME_VERSION: '20251108'
+          APPIMAGE_RUNTIME_SHA256: '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d'
           ARCH: x86_64
         run: |
           set -euo pipefail
@@ -145,6 +148,12 @@ jobs:
             "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
           echo "${APPIMAGETOOL_SHA256}  ${TOOL}" | sha256sum -c -
           chmod +x "$TOOL"
+
+          RUNTIME="$RUNNER_TEMP/runtime-x86_64"
+          curl -fsSL -o "$RUNTIME" \
+            "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-x86_64"
+          echo "${APPIMAGE_RUNTIME_SHA256}  ${RUNTIME}" | sha256sum -c -
+          chmod +x "$RUNTIME"
 
           shopt -s nullglob
           APPIMAGES=(dist/*.AppImage)
@@ -168,7 +177,7 @@ jobs:
           # has no FUSE for appimagetool itself). Left set for the whole step,
           # it would make the repacked AppImage launch the app instead of
           # answering --appimage-updateinformation below.
-          ( cd "$WORK/out" && APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$WORK/squashfs-root" "$NAME" )
+          ( cd "$WORK/out" && APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$WORK/squashfs-root" "$NAME" )
 
           # Both files must exist and be non-empty, or the release does not go out.
           test -s "$WORK/out/$NAME"       || { echo "::error::repacked AppImage is missing or empty"; exit 1; }
@@ -181,6 +190,16 @@ jobs:
             echo "::error::update information mismatch"
             echo "expected: $UPDATE_INFO"
             echo "got:      $GOT"
+            exit 1
+          fi
+
+          # Confirm the repacked AppImage carries the pinned runtime.
+          WANT_RT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$RUNTIME" --appimage-version 2>&1)"
+          GOT_RT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$WORK/out/$NAME" --appimage-version 2>&1)"
+          if [ "$GOT_RT" != "$WANT_RT" ]; then
+            echo "::error::AppImage runtime is not the pinned one"
+            echo "expected: $WANT_RT"
+            echo "got:      $GOT_RT"
             exit 1
           fi
 
