@@ -38,7 +38,7 @@ function exportBounds(app, pad = 60, pageIndex = null) {
 /** Exposed so the suite can check what an export would cover. */
 export const exportBoundsForTest = (app, pageIndex = null) => exportBounds(app, 60, pageIndex);
 
-export async function exportPng(app, { scale = 2, transparent = false, selectionOnly = false } = {}) {
+export async function exportPng(app, { scale = 2, transparent = false, selectionOnly = false, filePath: givenPath = null } = {}) {
   let box;
   if (selectionOnly && app.surface.selection.size) {
     box = app.surface.selectionBounds();
@@ -50,10 +50,13 @@ export async function exportPng(app, { scale = 2, transparent = false, selection
   const s = Math.min(scale, maxPx / Math.max(box.w, box.h));
   // the ruling prints with the page; a selection is a cut-out and comes without it
   const canvas = app.surface.renderTo(box, s, !transparent, !transparent && !(selectionOnly && app.surface.selection.size));
+  // the line is sized like small writing on the board itself, so it reads at any export size
+  stampCanvas(canvas, Math.max(10, 13 * s), Math.max(8, 12 * s));
   const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
   const buf = await blob.arrayBuffer();
 
-  const filePath = await window.board.saveDialog({
+  // givenPath lets the test suite run this without a native dialog
+  const filePath = givenPath || await window.board.saveDialog({
     title: t('Export as PNG'),
     defaultPath: safeName(app.store.doc.name) + '.png',
     filters: [{ name: t('PNG image'), extensions: ['png'] }]
@@ -82,6 +85,55 @@ export async function exportSvg(app, opts = {}) {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 
+/* ------------------------------------------------------------------ *
+ *  "Made with GazBoard"
+ *
+ *  A small grey line in the bottom-right corner of every exported page and
+ *  picture, the way a website says who made it at the foot of the page. It
+ *  never sits on the work. In a PDF and an SVG the word GazBoard is a link
+ *  to where the app comes from; a PNG is a flat picture and cannot be.
+ * ------------------------------------------------------------------ */
+export const MADE_WITH = { lead: 'Made with ', name: 'GazBoard', url: 'https://github.com/fahim9778/GazBoard' };
+const STAMP_INK = 'rgba(96,94,92,0.72)';
+const stampFont = (size) => `${size}px ${faceOf('ui')}`;
+
+/**
+ * Write the line onto a finished canvas, `size` canvas pixels high, `pad`
+ * pixels in from the bottom-right corner.
+ * @returns the word GazBoard's box, as fractions of the canvas, for its link
+ */
+function stampCanvas(canvas, size, pad) {
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = '600 ' + stampFont(size);
+  const bold = ctx.measureText(MADE_WITH.name).width;
+  ctx.font = stampFont(size);
+  const lead = ctx.measureText(MADE_WITH.lead).width;
+  const right = canvas.width - pad, base = canvas.height - pad;
+  ctx.fillStyle = STAMP_INK;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(MADE_WITH.lead, right - bold - lead, base);
+  ctx.font = '600 ' + stampFont(size);
+  ctx.fillText(MADE_WITH.name, right - bold, base);
+  ctx.restore();
+  const top = base - size * 1.05, h = size * 1.35;
+  return { fx: (right - bold) / canvas.width, fy: top / canvas.height, fw: bold / canvas.width, fh: h / canvas.height };
+}
+
+/** The same line as SVG, bottom-right of `box`, with GazBoard a link. */
+function stampSvg(box, size = 13) {
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = '600 ' + stampFont(size);
+  const bold = meas.measureText(MADE_WITH.name).width;
+  const pad = size, right = box.x + box.w - pad, base = box.y + box.h - pad;
+  const family = esc(faceOf('ui')).replace(/"/g, "'");
+  return `<g class="made-with" font-family="${family}" font-size="${size}" fill="#605e5c" fill-opacity="0.72">` +
+    `<text x="${(right - bold).toFixed(1)}" y="${base.toFixed(1)}" text-anchor="end">${esc(MADE_WITH.lead.trim())}&#160;</text>` +
+    `<a href="${MADE_WITH.url}" xlink:href="${MADE_WITH.url}" target="_blank"><title>${MADE_WITH.url}</title>` +
+    `<text x="${right.toFixed(1)}" y="${base.toFixed(1)}" text-anchor="end" font-weight="600">${MADE_WITH.name}</text></a></g>`;
+}
+
 /**
  * The board as an SVG. With `others` - the boards it links to, read by
  * linkedSources() - they go underneath it, each under its own name, and every
@@ -96,6 +148,7 @@ export function buildSvg(app, box, others = []) {
     parts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${box.w}" height="${box.h}" viewBox="${box.x} ${box.y} ${box.w} ${box.h}">`);
     parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${doc.background.color || '#fff'}"/>`);
     parts.push(...svgObjects(app.store.objects, meas));
+    parts.push(stampSvg(box));
     parts.push('</svg>');
     return parts.join('\n');
   }
@@ -146,6 +199,7 @@ export function buildSvg(app, box, others = []) {
   parts.push(`<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${doc.background.color || '#fff'}"/>`);
   parts.push(...svgObjects(app.store.objects, meas));
   parts.push(...links(app.store.objects));
+  parts.push(stampSvg(box));
   parts.push('</g>');
   for (const { src, bb, dx, dy, top } of placed) {
     parts.push(`<text x="${box.x}" y="${top + 46}" font-family="${family}" font-size="34" font-weight="600" fill="#201f1e">${esc(src.name || t('Untitled board'))}</text>`);
@@ -157,6 +211,7 @@ export function buildSvg(app, box, others = []) {
       parts.push(...svgObjects(src.store.objects, meas));
       parts.push(...links(src.store.objects));
     } finally { useConnectorStore(app.store); }
+    parts.push(stampSvg(bb));
     parts.push('</g>');
   }
   parts.push('</svg>');
@@ -509,7 +564,12 @@ export async function exportPdf(app, opts) {
     const pages = [];
     for (const sh of sheets) {
       const canvas = sh.src.main ? app.surface.renderTo(sh.box, sh.q, true) : renderOther(app, sh.src, sh.box, sh.q);
-      pages.push({ src: canvas.toDataURL('image/png'), wMm: sh.wMm, hMm: sh.hMm, links: sheetLinks(sh.src, sh.box, target) });
+      // "Made with GazBoard", 2.6 mm high, 4 mm in from the corner of the sheet's picture
+      const pxPerMm = canvas.width / Math.min(sh.wMm, L.innerW);
+      const made = stampCanvas(canvas, 2.6 * pxPerMm, 4 * pxPerMm);
+      const sheetLinksHere = sheetLinks(sh.src, sh.box, target);
+      sheetLinksHere.push({ ...made, url: MADE_WITH.url });
+      pages.push({ src: canvas.toDataURL('image/png'), wMm: sh.wMm, hMm: sh.hMm, links: sheetLinksHere });
       const k = pages.length;
       progress.update(k / n, n > 1 ? t('{n} of {total} pages', { n: k, total: n }) : t('Rendering…'));
       await new Promise((r2) => setTimeout(r2, 0));       // let the UI breathe
@@ -517,7 +577,8 @@ export async function exportPdf(app, opts) {
 
     progress.update(0.95, t('Writing the PDF…'));
     // opts.printer lets the suite see the page the PDF is printed from
-    const payload = { html: pdfHtml(pages, L), widthIn: L.pageW / 25.4, heightIn: L.pageH / 25.4 };
+    // the board's name is the PDF's title, which is what a PDF reader shows in its title bar
+    const payload = { html: pdfHtml(pages, L, app.store.doc.name || t('Untitled board')), widthIn: L.pageW / 25.4, heightIn: L.pageH / 25.4 };
     const res = await (opts.printer ? opts.printer(payload) : window.board.exportPdf(payload));
     if (!res.ok) { progress.close(); app.toast(res.error || t('PDF export failed')); return null; }
     await window.board.writeFile(filePath, res.data);
@@ -533,7 +594,7 @@ export async function exportPdf(app, opts) {
   }
 }
 
-function pdfHtml(pages, L) {
+function pdfHtml(pages, L, title = '') {
   const margin = L.marginMm || 0;
   const body = pages.map((p, i) => {
     // centre the sheet's bitmap inside the printable area
@@ -543,11 +604,12 @@ function pdfHtml(pages, L) {
     // turns each into a jump to the sheet it names
     const links = (p.links || []).map((k) => {
       const x = left + k.fx * w, y = top + k.fy * h, lw = k.fw * w, lh = k.fh * h;
+      if (k.url) return `<a class="gblink" href="${esc(k.url)}" data-url="${esc(k.url)}" data-x="${x.toFixed(2)}" data-y="${y.toFixed(2)}" data-w="${lw.toFixed(2)}" data-h="${lh.toFixed(2)}" style="left:${x.toFixed(2)}mm;top:${y.toFixed(2)}mm;width:${lw.toFixed(2)}mm;height:${lh.toFixed(2)}mm"></a>`;
       return `<a class="gblink" href="#s${k.to}" data-to="${k.to}" data-x="${x.toFixed(2)}" data-y="${y.toFixed(2)}" data-w="${lw.toFixed(2)}" data-h="${lh.toFixed(2)}" style="left:${x.toFixed(2)}mm;top:${y.toFixed(2)}mm;width:${lw.toFixed(2)}mm;height:${lh.toFixed(2)}mm"></a>`;
     }).join('');
     return `<div class="sheet" id="s${i}"><img src="${p.src}" style="width:${w}mm;height:${h}mm">${links}</div>`;
   }).join('\n');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
   @page { size: ${L.pageW}mm ${L.pageH}mm; margin: 0; }
   html, body { margin: 0; padding: 0; background: #fff; }
   .sheet {

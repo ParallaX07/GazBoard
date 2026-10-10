@@ -101,10 +101,11 @@ export async function generatePdfFromHtml(payload) {
 
         // links on the sheet: clear boxes, in mm from its top-left corner, each naming the sheet it jumps to
         const links = Array.from(sheet.querySelectorAll ? sheet.querySelectorAll('a.gblink') : []).map((a) => ({
-          to: Number(a.getAttribute('data-to')),
+          to: a.hasAttribute('data-to') ? Number(a.getAttribute('data-to')) : -1,
+          url: /^https:\/\/[\w.\/-]+$/.test(a.getAttribute('data-url') || '') ? a.getAttribute('data-url') : '',
           x: Number(a.getAttribute('data-x')), y: Number(a.getAttribute('data-y')),
           w: Number(a.getAttribute('data-w')), h: Number(a.getAttribute('data-h'))
-        })).filter((k) => Number.isInteger(k.to) && [k.x, k.y, k.w, k.h].every(Number.isFinite));
+        })).filter((k) => (k.url || Number.isInteger(k.to)) && [k.x, k.y, k.w, k.h].every(Number.isFinite));
 
         rawItems.push({ pageWmm, pageHmm, imgWmm, imgHmm, src, links });
       }
@@ -127,6 +128,9 @@ export async function generatePdfFromHtml(payload) {
     if (!rawItems.length) {
       return { ok: false, error: t('No printable content found') };
     }
+
+    // the document's title - the board's name - for the PDF reader's title bar
+    const title = (doc.querySelector && doc.querySelector('title') && doc.querySelector('title').textContent || '').trim();
 
     const pageItems = [];
     for (const item of rawItems) {
@@ -209,11 +213,13 @@ export async function generatePdfFromHtml(payload) {
 
       // Page Object, with a link annotation for each link that jumps to another sheet
       const annots = p.links
-        .filter((k) => k.to >= 0 && k.to < totalPages)
+        .filter((k) => k.url || (k.to >= 0 && k.to < totalPages))
         .map((k) => {
           const x1 = k.x * MM_TO_PT, x2 = (k.x + k.w) * MM_TO_PT;
           const y2 = p.pageHPt - k.y * MM_TO_PT, y1 = p.pageHPt - (k.y + k.h) * MM_TO_PT;
-          return `<< /Type /Annot /Subtype /Link /Rect [${x1.toFixed(2)} ${y1.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}] /Border [0 0 0] /Dest [${pageObjIds[k.to]} 0 R /Fit] >>`;
+          // a jump to another sheet, or (the "Made with GazBoard" line) a web address
+          const action = k.url ? `/A << /S /URI /URI (${k.url}) >>` : `/Dest [${pageObjIds[k.to]} 0 R /Fit]`;
+          return `<< /Type /Annot /Subtype /Link /Rect [${x1.toFixed(2)} ${y1.toFixed(2)} ${x2.toFixed(2)} ${y2.toFixed(2)}] /Border [0 0 0] ${action} >>`;
         });
       const annotStr = annots.length ? ` /Annots [${annots.join(' ')}]` : '';
       offsets.push(currentOffset());
@@ -233,9 +239,20 @@ export async function generatePdfFromHtml(payload) {
       addString('\nendstream\nendobj\n');
     }
 
+    // Document information: the title, written as UTF-16 so a Bangla or Chinese name reads correctly
+    const infoId = 3 + totalPages * 3;
+    let hex = 'FEFF';
+    for (const ch of title) {
+      const cp = ch.codePointAt(0);
+      if (cp > 0xffff) { const v = cp - 0x10000; hex += (0xd800 + (v >> 10)).toString(16).padStart(4, '0') + (0xdc00 + (v & 0x3ff)).toString(16).padStart(4, '0'); }
+      else hex += cp.toString(16).padStart(4, '0');
+    }
+    offsets.push(currentOffset());
+    addString(`${infoId} 0 obj\n<< /Title <${hex.toUpperCase()}> /Producer (GazBoard) >>\nendobj\n`);
+
     // Cross-reference table
     const startXref = currentOffset();
-    const totalObjs = 1 + totalPages * 3 + 2; // obj 0 + catalog + pages + 3*N
+    const totalObjs = 1 + totalPages * 3 + 3; // obj 0 + catalog + pages + 3*N + info
     addString(`xref\n0 ${totalObjs}\n`);
     addString('0000000000 65535 f \n');
     for (let i = 1; i < offsets.length; i++) {
@@ -244,7 +261,7 @@ export async function generatePdfFromHtml(payload) {
     }
 
     // Trailer
-    addString(`trailer\n<< /Size ${totalObjs} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF\n`);
+    addString(`trailer\n<< /Size ${totalObjs} /Root 1 0 R /Info ${infoId} 0 R >>\nstartxref\n${startXref}\n%%EOF\n`);
 
     // Concatenate all chunks into a single ArrayBuffer
     let totalLen = 0;

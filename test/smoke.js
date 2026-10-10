@@ -7957,7 +7957,14 @@ async function run(win, app) {
       const views = [...svg.matchAll(/<view id="gb-([^"]+)"/g)].map((m) => m[1]);
       const svgHrefs = [...new Set([...svg.matchAll(/<a href="#gb-([^"]+)"/g)].map((m) => m[1]))];
       let parses = true; try { const d = new DOMParser().parseFromString(svg, 'image/svg+xml'); parses = !d.querySelector('parsererror'); } catch { parses = false; }
-      return { said, cancelled, wrote: !!wrote, sheets, hrefs, phoneOk: phone.ok, phoneLinks, toNotesPage2,
+      const phoneTitle = (phoneText.match(/\/Title <([0-9A-F]+)>/) || [])[1] || '';
+      const titleHex = 'FEFF' + [...a.store.doc.name].map((c) => c.codePointAt(0).toString(16).padStart(4, '0')).join('').toUpperCase();
+      const repoInHtml = (html.match(/data-url="https:\/\/github\.com\/fahim9778\/GazBoard"/g) || []).length;
+      const repoInPhone = (phoneText.match(/\/URI \(https:\/\/github\.com\/fahim9778\/GazBoard\)/g) || []).length;
+      const plainSvg = E.buildSvg(a, { x: -100, y: -100, w: 1400, h: 1000 });
+      const svgStamps = (svg.match(/class="made-with"/g) || []).length;
+      const svgRepo = /<a href="https:\/\/github\.com\/fahim9778\/GazBoard"[^>]*>[\s\S]*?>GazBoard<\/text><\/a>/.test(plainSvg) && />Made with&#160;<\/text>/.test(plainSvg);
+      return { repoInHtml, repoInPhone, svgStamps, svgRepo, said, cancelled, wrote: !!wrote, sheets, hrefs, phoneOk: phone.ok, phoneLinks, toNotesPage2, phoneTitled: phoneTitle === titleHex, boardName: a.store.doc.name, htmlTitled: html.includes('<title>' + a.store.doc.name + '</title>'),
         views, svgHrefs, parses, named: svg.includes('>Linktest Week 5</text>'),
         ids: { alg: '${made.alg}', w5: '${made.w5}', w4: '${made.w4}', notes: '${made.notes}' } };
     `);
@@ -7974,6 +7981,30 @@ async function run(win, app) {
     check('links: in that PDF the links jump to the linked boards, and a link to page 2 of Notes jumps to that page',
       /(^|,)s1(,|$)/.test(lx.hrefs) && /(^|,)s2(,|$)/.test(lx.hrefs) && /(^|,)s4(,|$)/.test(lx.hrefs) && pdfLinks >= 3,
       `jumps in the printed page: ${lx.hrefs} (wanted s1 Week 5, s2 Week 4, s4 Notes page 2); link areas in the PDF: ${pdfLinks}`);
+    const repoLinksDesktop = (pdfText.match(/github\.com\/fahim9778\/GazBoard/g) || []).length;
+    check('every exported PDF page says "Made with GazBoard", and GazBoard links to the repo - on the desktop and the phone',
+      lx.repoInHtml === 6 && repoLinksDesktop >= 6 && lx.repoInPhone === 6,
+      `pages printed with the line: ${lx.repoInHtml} of 6; links to the repo in the desktop PDF: ${repoLinksDesktop}; in the phone's PDF: ${lx.repoInPhone}`);
+    check('an SVG says "Made with GazBoard" with GazBoard a link to the repo, once for each board in it',
+      lx.svgRepo && lx.svgStamps === 3,
+      `plain SVG has the line with a link: ${lx.svgRepo}; lines in the SVG with two linked boards: ${lx.svgStamps} (wanted 3)`);
+    const pngPath = path.join(OUT, 'made-with.png');
+    await js(`const E = await import('app://board/js/export.js'); await E.exportPng(window.app, { scale: 1, filePath: ${JSON.stringify(pngPath)} });`);
+    const pngB64 = (await fs.readFile(pngPath).catch(() => Buffer.alloc(0))).toString('base64');
+    const pngInk = await js(String.raw`
+      const img = new Image(); img.src = 'data:image/png;base64,${pngB64}'; await img.decode();
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // count grey pixels in the bottom-right corner strip, where the line goes
+      const d = g.getImageData(c.width - 160, c.height - 26, 150, 20).data;
+      let ink = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 200 && Math.abs(d[i] - d[i + 2]) < 20) ink++;
+      return { w: c.width, h: c.height, ink };
+    `);
+    check('an exported PNG has "Made with GazBoard" in its bottom-right corner',
+      pngInk.ink > 40, `${pngInk.w}x${pngInk.h} picture; grey pixels in the corner strip: ${pngInk.ink} (wanted the line's lettering, over 40)`);
+    check('a PDF is titled with the board\'s name, not the name of the page it was printed from',
+      /\/Title/.test(pdfText) && lx.htmlTitled && lx.phoneTitled,
+      `desktop PDF has a title: ${/\/Title/.test(pdfText)}, printed from a page titled "${lx.boardName}": ${lx.htmlTitled}; phone PDF titled "${lx.boardName}": ${lx.phoneTitled}`);
     check('links: the phone\'s own PDF writer makes the same links',
       lx.phoneOk && lx.phoneLinks >= 3 && lx.toNotesPage2,
       `written: ${lx.phoneOk}; link areas: ${lx.phoneLinks} (wanted 3 or more); one jumping to Notes page 2: ${lx.toNotesPage2}`);
