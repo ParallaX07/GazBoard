@@ -39,16 +39,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run the test suite
-        run: npx electron . --smoke
+        run: pnpm exec electron . --smoke
         # a failed assertion exits non-zero, so a broken build never ships
 
       - name: Build the installer and the portable build
@@ -56,7 +59,7 @@ jobs:
         # line REPLACES build.win.target in package.json rather than adding to
         # it, so "--win nsis" silently dropped the portable build that
         # package.json asks for - which is why no release before 2.4.2 has one.
-        run: npx electron-builder --win nsis portable --x64 --publish never
+        run: pnpm exec electron-builder --win nsis portable --x64 --publish never
 
       # The in-app updater (updater.js) reads latest.yml for the installer's
       # SHA-512, and the .blockmap files to fetch only the parts that changed.
@@ -124,19 +127,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run the test suite
-        run: xvfb-run -a npx electron . --smoke --no-sandbox
+        run: xvfb-run -a pnpm exec electron . --smoke --no-sandbox
 
       - name: Build the AppImage and .deb
-        run: npx electron-builder --linux AppImage deb --x64 --publish never
+        run: pnpm exec electron-builder --linux AppImage deb --x64 --publish never
 
       # Makes the AppImage updatable with AppImageUpdate (appimageupdatetool).
       # electron-builder's own AppImage carries no update information, so it is
@@ -306,20 +312,23 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run the test suite
-        run: npm run smoke:mac
+        run: pnpm run smoke:mac
         # macOS runners have a window server, so there is no xvfb here
 
       - name: Build for Apple Silicon and Intel
-        run: npx electron-builder --mac --arm64 --x64 --publish never
+        run: pnpm exec electron-builder --mac --arm64 --x64 --publish never
         env:
           # There is no paid Apple certificate: without this, electron-builder
           # hunts for a Developer ID in the keychain. package.json asks for an
@@ -398,16 +407,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build web distribution
-        run: npm run build:web
+        run: pnpm run build:web
 
       - name: Run web test suite
-        run: npm run test:web
+        run: pnpm run test:web
