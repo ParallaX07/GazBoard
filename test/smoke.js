@@ -28,6 +28,9 @@ async function run(win, app) {
   const js = (code) => win.webContents.executeJavaScript(`(async () => { ${code} })()`, true);
 
   await sleep(900);
+  // Pixel checks below assume white paper and a light canvas. The smoke
+  // profile is fresh, but System theme follows the host and may start dark.
+  await js(`window.app.settings.theme = 'light'; window.app.applyTheme();`);
   // GazBoard starts on the last board, the way Whiteboard does - never on My boards.
   const startedOnBoards = await js(`await new Promise((r) => setTimeout(r, 600)); return !!(window.app.panels.open && window.app.panels.page) || document.getElementById('panel').classList.contains('page');`);
   globalThis.__startedOnBoards = startedOnBoards;
@@ -16454,7 +16457,24 @@ module.exports.run = async (win, app) => {
   await fs.writeFile(path.join(mergedFolder, storageSeed + '.json'), JSON.stringify({
     id: storageSeed, name: 'Existing destination board', objects: [], order: []
   }));
+  const returnToCustom = await js(`return await window.board.storage.apply({ path:${JSON.stringify(copiedFolder)}, mode:'use-as-is' });`);
+  if (!returnToCustom.ok) throw new Error(returnToCustom.error || 'Could not select the custom folder for migration checks.');
+  const unsafeBoardId = `../../gazboard-migration-escape-${process.pid}`;
+  const escapedBoardPath = path.resolve(mergedFolder, unsafeBoardId + '.json');
+  await fs.rm(escapedBoardPath, { force: true });
+  const malformedBoard = Buffer.from('{ not a board }');
+  await fs.writeFile(path.join(copiedFolder, 'unsafe.json'), JSON.stringify({
+    id: unsafeBoardId, name: 'Unsafe stored id', objects: [], order: []
+  }));
+  await fs.writeFile(path.join(copiedFolder, 'malformed.json'), malformedBoard);
   const merged = await js(`return await window.board.storage.apply({ path:${JSON.stringify(mergedFolder)}, mode:'copy-merge' });`);
+  const importedUnsafe = JSON.parse(await fs.readFile(path.join(mergedFolder, 'unsafe.json'), 'utf8'));
+  const malformedCopied = await fs.readFile(path.join(mergedFolder, 'malformed.json'));
+  check('copy keeps stored board ids inside the selected folder',
+    merged.ok && importedUnsafe.id === 'unsafe' && !(await fs.stat(escapedBoardPath).then(() => true, () => false)),
+    `copy ${merged.ok}; stored id ${importedUnsafe.id}; escaped file exists ${await fs.stat(escapedBoardPath).then(() => true, () => false)}`);
+  check('copy preserves malformed board files without aborting the migration',
+    malformedCopied.equals(malformedBoard), `malformed file preserved: ${malformedCopied.equals(malformedBoard)}`);
   const mergedList = await js(`return await window.board.boards.list();`);
   const hasBothClashNames = mergedList.some((b) => b.name === 'Existing destination board')
     && mergedList.some((b) => b.name === 'Storage copy source' && b.id !== storageSeed);
@@ -16487,14 +16507,15 @@ module.exports.run = async (win, app) => {
   const storageSettings = await js(`
     const a = window.app; a.panels.settings(); await new Promise((r) => setTimeout(r, 150));
     const section = [...document.querySelectorAll('.section')].find((e) => e.querySelector('h5')?.textContent === 'Storage');
-    return { exists:!!section, path:section?.querySelector('code')?.textContent,
+    return { exists:!!section, path:section?.querySelector('code')?.textContent, text:section?.textContent,
       buttons:[...(section?.querySelectorAll('button') || [])].map((b) => b.textContent.trim()),
       note:section?.querySelector('p')?.textContent || '' };
   `);
   check('desktop Settings shows the active boards folder and the storage controls',
     storageSettings.exists && storageSettings.path === boardsDir
       && /Change folder/.test(storageSettings.buttons.join('|')) && /Reset to default/.test(storageSettings.buttons.join('|'))
-      && /Open folder/.test(storageSettings.buttons.join('|')) && /Nextcloud/.test(storageSettings.note),
+      && /Open folder/.test(storageSettings.buttons.join('|')) && /Nextcloud/.test(storageSettings.note)
+      && !/\bnull\b/.test(storageSettings.text),
     JSON.stringify(storageSettings));
 
   /* ---- errors ---- */

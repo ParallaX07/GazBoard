@@ -1159,7 +1159,7 @@ export function createPanels(app) {
         const [i, state] = await Promise.all([window.board.info(), window.board.storage.get()]);
         if (!storage.isConnected) return;
         const path = i.boardsDir || state.current || (i.userData ? i.userData + '/boards' : '');
-        storage.replaceChildren(
+        storage.replaceChildren(...[
           i.storage?.status === 'fallback' ? h('div', { style: 'padding:8px 10px;margin-bottom:8px;border:1px solid rgba(255,185,0,.4);border-radius:6px;background:rgba(255,185,0,.12);font-size:12px;line-height:1.5' }, t('The chosen boards folder is unavailable. GazBoard is using the default folder for this session.')) : null,
           h('code', { style: 'font-size:11px;display:block;word-break:break-all;margin-bottom:8px' }, path),
           h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
@@ -1217,7 +1217,8 @@ export function createPanels(app) {
             else if (!result?.canceled) { storageMessage = `${t('Could not remove old copies')}: ${result?.error || ''}`; storageMessageIsError = true; }
             await drawStorage();
           } }, t('Move old copies to Trash…')) : null,
-          h('p', { style: 'font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:0' }, t('Tip: pick a folder inside Nextcloud, Dropbox or Syncthing to sync your boards. Use GazBoard on one computer at a time.')));
+          h('p', { style: 'font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:0' }, t('Tip: pick a folder inside Nextcloud, Dropbox or Syncthing to sync your boards. Use GazBoard on one computer at a time.'))
+        ].filter(Boolean));
         if (storageMessage) storage.append(h('div', {
           role: 'status', style: `font-size:12px;margin-top:8px;color:${storageMessageIsError ? 'var(--danger,#c50f1f)' : 'var(--text-2)'}`
         }, storageMessage));
