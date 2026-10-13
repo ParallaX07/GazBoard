@@ -50,3 +50,16 @@ test('validation rejects files, non-absolute paths, app folders, and overlapping
   assert.equal(Storage.validateBoardsDir(current, { protectedDir: current }).ok, true);
   assert.equal(Storage.validateBoardsDir(current, { currentDir: current }).ok, true);
 });
+
+test('startup validation does not create a missing folder and rejects paths that cannot be created', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gazboard-storage-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const missing = path.join(root, 'not-mounted');
+  assert.equal(Storage.validateBoardsDir(missing, { create: false }).ok, false);
+  assert.equal(fs.existsSync(missing), false);
+  const readOnly = path.join(root, 'read-only');
+  fs.mkdirSync(readOnly);
+  fs.chmodSync(readOnly, 0o555);
+  try { assert.equal(Storage.validateBoardsDir(readOnly).ok, false); }
+  finally { fs.chmodSync(readOnly, 0o755); }
+});

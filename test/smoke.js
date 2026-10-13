@@ -16393,6 +16393,10 @@ module.exports.run = async (win, app) => {
     a.store.rename('Storage copy source');
     a.store.add({ id:'storage-seed-object', type:'shape', kind:'rect', x:10, y:10, w:40, h:30,
       rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+    a.store.add({ id:'storage-seed-link', type:'boardlink', x:60, y:10, w:80, h:60, rotation:0,
+      board:{ id:a.store.doc.id, name:'Storage copy source' } });
+    a.store.add({ id:'storage-seed-reference', type:'text', x:10, y:60, w:200, h:40,
+      text:'See @[Storage copy source](b:' + a.store.doc.id + ')' });
     await a.persist({ force:true });
     return a.store.doc.id;
   `);
@@ -16415,10 +16419,36 @@ module.exports.run = async (win, app) => {
   check('new boards save in the selected folder and not in the default folder',
     newInCustom.includes('Written in custom folder') && !(await fs.stat(path.join(boardsDir, storageNew + '.json')).then(() => true, () => false)),
     `custom file present: ${newInCustom.includes('Written in custom folder')}`);
-  const sourceAssetCount = (await fs.readdir(path.join(userData, 'assets')).catch(() => [])).length;
-  const copiedAssetCount = (await fs.readdir(path.join(copiedFolder, 'assets')).catch(() => [])).length;
-  check('board assets are copied with a custom storage folder', copiedAssetCount >= sourceAssetCount,
-    `${copiedAssetCount} copied assets vs ${sourceAssetCount} in the default profile`);
+  const lanIncoming = await js(`
+    const a = window.app;
+    const board = { id:'storage-lan-received', name:'LAN storage check', objects:[], order:[], pages:[] };
+    return { ok:await a.saveIncomingBoard(board, false), id:board.id };
+  `);
+  const incomingInCustom = await fs.readFile(path.join(copiedFolder, lanIncoming.id + '.json'), 'utf8').catch(() => '');
+  check('a LAN-received board is filed in the selected folder',
+    lanIncoming.ok && incomingInCustom.includes('LAN storage check')
+      && !(await fs.stat(path.join(boardsDir, lanIncoming.id + '.json')).then(() => true, () => false)),
+    `accepted: ${lanIncoming.ok}; custom file present: ${incomingInCustom.includes('LAN storage check')}`);
+  const defaultAssets = path.join(userData, 'assets');
+  const copiedAssets = path.join(copiedFolder, 'assets');
+  const sourceAssetNames = await fs.readdir(defaultAssets).catch(() => []);
+  const copiedAssetNames = await fs.readdir(copiedAssets).catch(() => []);
+  const assetBytesMatch = await Promise.all(sourceAssetNames.map(async (name) => {
+    const [source, copied] = await Promise.all([fs.readFile(path.join(defaultAssets, name)), fs.readFile(path.join(copiedAssets, name))]);
+    return source.equals(copied);
+  }));
+  check('board assets are copied byte for byte with a custom storage folder',
+    copiedAssetNames.length >= sourceAssetNames.length && assetBytesMatch.every(Boolean),
+    `${copiedAssetNames.length} copied assets, ${sourceAssetNames.length} source assets, bytes match: ${assetBytesMatch.every(Boolean)}`);
+  const resetCopy = await js(`return await window.board.storage.reset({ mode:'copy-merge' });`);
+  const returnedAssetNames = await fs.readdir(defaultAssets).catch(() => []);
+  const returnedAssetsMatch = await Promise.all(sourceAssetNames.map(async (name) => {
+    const [source, returned] = await Promise.all([fs.readFile(path.join(copiedAssets, name)), fs.readFile(path.join(defaultAssets, name))]);
+    return source.equals(returned);
+  }));
+  check('resetting with copy puts custom-folder assets back where the default profile reads them',
+    resetCopy.ok && sourceAssetNames.every((name) => returnedAssetNames.includes(name)) && returnedAssetsMatch.every(Boolean),
+    `reset ${JSON.stringify(resetCopy)}; ${returnedAssetNames.length} assets in the default profile, bytes match: ${returnedAssetsMatch.every(Boolean)}`);
 
   await fs.mkdir(mergedFolder, { recursive: true });
   await fs.writeFile(path.join(mergedFolder, storageSeed + '.json'), JSON.stringify({
@@ -16428,9 +16458,14 @@ module.exports.run = async (win, app) => {
   const mergedList = await js(`return await window.board.boards.list();`);
   const hasBothClashNames = mergedList.some((b) => b.name === 'Existing destination board')
     && mergedList.some((b) => b.name === 'Storage copy source' && b.id !== storageSeed);
+  const mergedSource = mergedList.find((b) => b.name === 'Storage copy source' && b.id !== storageSeed);
+  const mergedSourceDoc = mergedSource && JSON.parse(await fs.readFile(path.join(mergedFolder, mergedSource.id + '.json'), 'utf8'));
+  const boardLinkId = mergedSourceDoc?.objects.find((o) => o.id === 'storage-seed-link')?.board?.id;
+  const linkedText = mergedSourceDoc?.objects.find((o) => o.id === 'storage-seed-reference')?.text;
+  const internalLinksRemapped = boardLinkId === mergedSource?.id && linkedText?.includes(`(b:${mergedSource.id})`);
   check('copy and keep both preserves destination boards and gives a name clash a new id',
-    merged.ok && hasBothClashNames,
-    `copy result ${JSON.stringify(merged)}; matching boards ${JSON.stringify(mergedList.filter((b) => /Storage copy source|Existing destination board/.test(b.name)))}`);
+    merged.ok && hasBothClashNames && internalLinksRemapped,
+    `copy result ${JSON.stringify(merged)}; matching boards ${JSON.stringify(mergedList.filter((b) => /Storage copy source|Existing destination board/.test(b.name)))}; linked ids ${boardLinkId}, ${linkedText}`);
 
   const emptySwitch = await js(`return await window.board.storage.apply({ path:${JSON.stringify(emptyFolder)}, mode:'empty' });`);
   await fs.writeFile(path.join(emptyFolder, 'fallback-board.json'), JSON.stringify({
@@ -16449,6 +16484,18 @@ module.exports.run = async (win, app) => {
       && keptOldFolder.includes('Most recent copied board'),
     `nested: ${nestedRejected.error}; reset: ${JSON.stringify(reset)}`);
   await fs.rm(storageRoot, { recursive: true, force: true });
+  const storageSettings = await js(`
+    const a = window.app; a.panels.settings(); await new Promise((r) => setTimeout(r, 150));
+    const section = [...document.querySelectorAll('.section')].find((e) => e.querySelector('h5')?.textContent === 'Storage');
+    return { exists:!!section, path:section?.querySelector('code')?.textContent,
+      buttons:[...(section?.querySelectorAll('button') || [])].map((b) => b.textContent.trim()),
+      note:section?.querySelector('p')?.textContent || '' };
+  `);
+  check('desktop Settings shows the active boards folder and the storage controls',
+    storageSettings.exists && storageSettings.path === boardsDir
+      && /Change folder/.test(storageSettings.buttons.join('|')) && /Reset to default/.test(storageSettings.buttons.join('|'))
+      && /Open folder/.test(storageSettings.buttons.join('|')) && /Nextcloud/.test(storageSettings.note),
+    JSON.stringify(storageSettings));
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);
