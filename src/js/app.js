@@ -466,17 +466,7 @@ class App {
    * skipped: saving it on sight left a fresh "Untitled board" behind on every
    * single launch. `force` is for an explicit "save" the user asked for.
    */
-  persist(options = {}) {
-    if (this._storageSwitching && !options.storageFlush) {
-      this._unsaved = true;
-      return (this._storageResume || Promise.resolve()).then(() => this.persist(options));
-    }
-    const write = (this._persistInFlight || Promise.resolve()).catch(() => {}).then(() => this._persistNow(options));
-    this._persistInFlight = write;
-    return write.finally(() => { if (this._persistInFlight === write) this._persistInFlight = null; });
-  }
-
-  async _persistNow({ force = false } = {}) {
+  async persist({ force = false } = {}) {
     if (!force && this.unsavedNew && !this.store.objects.length) return;
     this.store.doc.camera = this.surface.cam.toJSON();
     // boards.save writes the file and records the "last open" pointer in one go,
@@ -3860,7 +3850,7 @@ class App {
           + 'font-size:11.5px;color:var(--text-2);line-height:1.7'
       }, h('div', {}, i.electron ? t('Your boards are saved on this computer at:') : t('Your boards are stored in:')),
       h('code', { style: 'font-size:11px;display:block;margin:4px 0 0;word-break:break-all' },
-        i.boardsDir || (i.electron ? i.userData + '/boards' : i.userData)));
+        i.userData + (i.electron ? '/boards' : '')));
       if (i.electron) {
         const openIt = h('button', { class: 'btn' }, t('Open that folder'));
         openIt.style.cssText += 'margin-top:8px;padding:4px 10px;font-size:12.5px';
@@ -3868,7 +3858,7 @@ class App {
           // Older preloads have only showItem. Landing one folder up is worse
           // than the button doing nothing at all, but not by much.
           if (window.board.openBoardsFolder) window.board.openBoardsFolder();
-          else window.board.showItem(i.boardsDir || i.userData + '/boards');
+          else window.board.showItem(i.userData + '/boards');
         });
         where.appendChild(openIt);
       } else if (i.isAndroid) {
@@ -3971,41 +3961,14 @@ class App {
 
     window.board.onMenu((id) => this.command(id));
 
-    const storageWarning = document.getElementById('storageWarning');
-    storageWarning?.addEventListener('click', () => this.panels.settings());
-    this.refreshStorageStatus();
-
     // The main process asks for a flush before it quits; write out anything the
     // autosave debounce is still sitting on.
-    const flushForStorageSwitch = async (ticket) => {
-      if (ticket) {
-        this._storageSwitching = true;
-        this._storageResume = new Promise((resolve) => { this._resumeStorage = resolve; });
-      }
-      clearTimeout(this._saveTimer);
+    window.board.onFlush(async () => {
       try {
         this.textEditor.commit();
-        await this._persistInFlight;
-        await this.persist({ force: true, storageFlush: !!ticket });
-        if (ticket) window.board.storage?.flushAck?.(ticket, true);
-      } catch (e) {
-        console.warn('flush failed:', e);
-        if (ticket) window.board.storage?.flushAck?.(ticket, false);
-      }
-    };
-    window.board.onFlush(() => flushForStorageSwitch());
-    window.board.storage?.onFlush?.(flushForStorageSwitch);
-    window.board.storage?.onResume?.(async ({ ok } = {}) => {
-      this._storageSwitching = false;
-      this._resumeStorage?.();
-      this._resumeStorage = null;
-      this._storageResume = null;
-      if (ok) await this.refreshBoardDirectory();
-      if (this._unsaved) this.persist();
-      this.refreshStorageStatus();
-      this.panels?.refreshStorage?.();
+        await this.persist();
+      } catch (e) { console.warn('flush failed:', e); }
     });
-    window.board.storage?.onChanged?.(() => { this.refreshStorageStatus(); this.panels?.refreshStorage?.(); });
 
     // Losing focus is the cheapest moment to make sure work is on disk - it is
     // what happens just before someone alt-tabs away and shuts the machine down.
@@ -4117,18 +4080,6 @@ class App {
     window.addEventListener('beforeunload', () => {
       if (this.settings.autosave) this.persist();
     });
-  }
-
-  async refreshStorageStatus() {
-    const badge = document.getElementById('storageWarning');
-    if (!badge || !window.board?.info) return;
-    try {
-      const info = await window.board.info();
-      const fallback = info?.storage?.status === 'fallback';
-      badge.hidden = !fallback;
-      badge.textContent = t('Using default folder for this session');
-      badge.title = t('Your chosen boards folder is unavailable. Open Settings to change it.');
-    } catch { badge.hidden = true; }
   }
 
   /**
