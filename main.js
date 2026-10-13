@@ -297,32 +297,42 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
     .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json'));
   const occupied = new Set((await fsp.readdir(toBoards).catch(() => [])));
   const remap = new Map();
+  const sources = [];
   for (const entry of sourceFiles) {
-    const oldId = path.basename(entry.name, path.extname(entry.name));
-    if (occupied.has(entry.name) && merge) remap.set(oldId, crypto.randomUUID());
+    const raw = await fsp.readFile(path.join(fromBoards, entry.name));
+    let original = null;
+    try {
+      const parsed = JSON.parse(raw.toString('utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) original = parsed;
+    } catch {}
+    const fileId = path.basename(entry.name, path.extname(entry.name));
+    const oldId = typeof original?.id === 'string' ? original.id : fileId;
+    const safeId = /^[A-Za-z0-9_-]{1,128}$/.test(oldId) ? oldId
+      : (/^[A-Za-z0-9_-]{1,128}$/.test(fileId) ? fileId : crypto.randomUUID());
+    sources.push({ entry, raw, original, oldId, safeId });
+    if (original && occupied.has(safeId + '.json') && merge) remap.set(oldId, crypto.randomUUID());
   }
   let copied = 0, skipped = 0;
   const verify = [];
   const sourceBoards = [];
-  for (const entry of sourceFiles) {
-    const source = path.join(fromBoards, entry.name);
-    const raw = await fsp.readFile(source);
+  const createdFiles = [];
+  try {
+  for (const { entry, raw, original, oldId, safeId } of sources) {
     sourceBoards.push({ name: entry.name, size: raw.length, hash: crypto.createHash('sha256').update(raw).digest('hex') });
-    const original = JSON.parse(raw.toString('utf8'));
-    let id = String(original.id || path.basename(entry.name, '.json'));
-    if (remap.has(id)) id = remap.get(id);
+    let id = original ? (remap.get(oldId) || safeId) : path.basename(entry.name, path.extname(entry.name));
     let dest = path.join(toBoards, id + '.json');
     if (occupied.has(path.basename(dest))) {
       if (!merge) throw new Error('This folder now contains a board with the same name. Choose “also copy, keeping both” to continue.');
       id = crypto.randomUUID();
       dest = path.join(toBoards, id + '.json');
     }
-    const content = remap.size || id !== String(original.id || path.basename(entry.name, '.json'))
-      ? remapImportedBoard({ ...original, id }, remap) : original;
-    content.id = id;
-    const bytes = id === String(original.id || path.basename(entry.name, '.json')) && !remap.size
-      ? raw : Buffer.from(JSON.stringify(content));
+    const content = original ? (remap.size || id !== oldId
+      ? remapImportedBoard({ ...original, id }, remap) : original) : null;
+    if (content) content.id = id;
+    const bytes = original && id === oldId && !remap.size ? raw
+      : (content ? Buffer.from(JSON.stringify(content)) : raw);
     await fsp.writeFile(dest, bytes, { flag: 'wx' });
+    createdFiles.push(dest);
     occupied.add(path.basename(dest));
     verify.push({ file: dest, size: bytes.length });
     copied++;
@@ -344,6 +354,7 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
       sourceAssetFiles.push({ name: entry.name, size: sourceBytes.length, hash: crypto.createHash('sha256').update(sourceBytes).digest('hex') });
       try {
         await fsp.copyFile(src, dest, fs.constants.COPYFILE_EXCL);
+        createdFiles.push(dest);
         verifyAssets.push({ file: dest, size: sourceBytes.length });
         assetsCopied++;
       }
@@ -366,6 +377,10 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
     if (st.size !== item.size) throw new Error(`Could not verify copied asset ${path.basename(item.file)}.`);
   }
   return { copied, skipped, assetsCopied, sourceBoards, sourceAssetFiles, sourceAssets };
+  } catch (e) {
+    await Promise.all(createdFiles.map((file) => fsp.unlink(file).catch(() => {})));
+    throw e;
+  }
 }
 
 async function trashOldStorageCopies(token) {
@@ -1338,7 +1353,7 @@ function ipc() {
     }
     return { board: null, reason: 'none' };
   });
-  ipcMain.handle('boards:delete', async (_e, id) => {
+  ipcMain.handle('boards:delete', (_e, id) => withStorageWrite(async () => {
     let ok = false;
     try { await fsp.unlink(path.join(dataDir(), id + '.json')); ok = true; } catch { ok = false; }
     // The "last open" pointer must not go on naming a board that no longer
@@ -1346,7 +1361,7 @@ function ipc() {
     // deleted file before falling back.
     try { if (await getLastBoard() === id) await setLastBoard(null); } catch {}
     return ok;
-  });
+  }));
 
   /* --- document import: anything -> PDF bytes --- */
   ipcMain.handle('export:pdf', async (_e, { html, widthIn, heightIn }) => {
