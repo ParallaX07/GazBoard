@@ -7,14 +7,18 @@ set -e
 cd "$(dirname "$0")/.."
 PROFILE="${PROFILE:-/tmp/gazboard-restart-test}"
 rm -rf "$PROFILE"
+rm -rf "${PROFILE}-custom"
 
 cat > /tmp/gb-restart-1.js <<'JS'
 'use strict';
 module.exports.run = async (win, app) => {
   const js = (c) => win.webContents.executeJavaScript(`(async()=>{${c}})()`, true);
   await new Promise(r => setTimeout(r, 1200));
+  const customDir = app.getPath('userData') + '-custom';
   const out = await js(`
     const a = window.app;
+    const changed = await window.board.storage.apply({ path: ${JSON.stringify(customDir)}, mode: 'empty' });
+    if (!changed.ok) throw new Error(changed.error);
     a.newBoard(true);
     a.store.rename('Work in progress');
     a.store.add({ id:'w1', type:'text', x:80, y:80, w:420, h:60, text:'three hours of notes',
@@ -35,7 +39,8 @@ module.exports.run = async (win, app) => {
   const out = await js(`
     const a = window.app;
     const list = await window.board.boards.list();
-    return { name: a.store.doc.name, objects: a.store.objects.length, boards: list.length };
+    const storage = await window.board.storage.get();
+    return { name: a.store.doc.name, objects: a.store.objects.length, boards: list.length, storage: storage.current };
   `);
   console.log('REOPENED ' + JSON.stringify(out));
   app.exit(0);
@@ -54,4 +59,5 @@ echo "$RESULT"
 echo "$RESULT" | grep -q '"name":"Work in progress"' || { echo "FAIL: the board did not come back"; exit 1; }
 echo "$RESULT" | grep -q '"objects":1' || { echo "FAIL: the board came back empty"; exit 1; }
 echo "$RESULT" | grep -q '"boards":1' || { echo "FAIL: junk boards were left behind"; exit 1; }
+echo "$RESULT" | grep -Fq "\"storage\":\"${PROFILE}-custom\"" || { echo "FAIL: custom storage setting did not survive restart"; exit 1; }
 echo "PASS - the board survived a hard restart, with no litter"

@@ -3,6 +3,7 @@
 // writes screenshots to test/out/. Run with:  npm run smoke
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const os = require('node:os');
 
 const OUT = process.env.GAZBOARD_SMOKE_OUT || path.join(__dirname, 'out');
 const FIX = path.join(__dirname, 'fixtures');
@@ -16374,6 +16375,80 @@ module.exports.run = async (win, app) => {
     enUi.booted && enUi.lang === 'en' && enUi.dir === 'ltr' && enUi.present === 'Present' && !enUi.zoombarLeft &&
     (process.platform === 'darwin' || enMenu.includes('File')),
     `lang ${enUi.lang}, dir ${enUi.dir}, Present button "${enUi.present}", zoom bar on the left: ${enUi.zoombarLeft}, menu: ${enMenu.join(' | ')}`);
+
+  /* ---- desktop boards folder ---- */
+  const storageRoot = path.join(os.tmpdir(), `gazboard-storage-smoke-${process.pid}`);
+  const copiedFolder = path.join(storageRoot, 'copied');
+  const mergedFolder = path.join(storageRoot, 'merged');
+  const emptyFolder = path.join(storageRoot, 'empty');
+  await fs.rm(storageRoot, { recursive: true, force: true });
+  await fs.mkdir(storageRoot, { recursive: true });
+  const storageBaseline = await js(`return await window.board.storage.get();`);
+  check('without a storage config, desktop boards use the original default folder',
+    storageBaseline.current === boardsDir && storageBaseline.default === boardsDir && !storageBaseline.isCustom,
+    `${storageBaseline.current} (expected ${boardsDir})`);
+  const storageSeed = await js(`
+    const a = window.app;
+    a.newBoard(true);
+    a.store.rename('Storage copy source');
+    a.store.add({ id:'storage-seed-object', type:'shape', kind:'rect', x:10, y:10, w:40, h:30,
+      rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+    await a.persist({ force:true });
+    return a.store.doc.id;
+  `);
+  const seedPath = path.join(boardsDir, storageSeed + '.json');
+  const seedBytes = await fs.readFile(seedPath);
+  const appliedCopy = await js(`return await window.board.storage.apply({ path:${JSON.stringify(copiedFolder)}, mode:'copy' });`);
+  const copyBytes = await fs.readFile(path.join(copiedFolder, storageSeed + '.json'));
+  check('copying changes the active folder only after preserving the source board byte for byte',
+    appliedCopy.ok && copyBytes.equals(seedBytes) && (await js(`return (await window.board.storage.get()).current;`)) === copiedFolder,
+    `copy result ${JSON.stringify(appliedCopy)}, source ${seedBytes.length} bytes, destination ${copyBytes.length} bytes`);
+  const storageNew = await js(`
+    const a = window.app;
+    a.newBoard(true); a.store.rename('Written in custom folder');
+    a.store.add({ id:'storage-custom-object', type:'shape', kind:'rect', x:0, y:0, w:10, h:10,
+      rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+    await a.persist({ force:true });
+    return a.store.doc.id;
+  `);
+  const newInCustom = await fs.readFile(path.join(copiedFolder, storageNew + '.json'), 'utf8');
+  check('new boards save in the selected folder and not in the default folder',
+    newInCustom.includes('Written in custom folder') && !(await fs.stat(path.join(boardsDir, storageNew + '.json')).then(() => true, () => false)),
+    `custom file present: ${newInCustom.includes('Written in custom folder')}`);
+  const sourceAssetCount = (await fs.readdir(path.join(userData, 'assets')).catch(() => [])).length;
+  const copiedAssetCount = (await fs.readdir(path.join(copiedFolder, 'assets')).catch(() => [])).length;
+  check('board assets are copied with a custom storage folder', copiedAssetCount >= sourceAssetCount,
+    `${copiedAssetCount} copied assets vs ${sourceAssetCount} in the default profile`);
+
+  await fs.mkdir(mergedFolder, { recursive: true });
+  await fs.writeFile(path.join(mergedFolder, storageSeed + '.json'), JSON.stringify({
+    id: storageSeed, name: 'Existing destination board', objects: [], order: []
+  }));
+  const merged = await js(`return await window.board.storage.apply({ path:${JSON.stringify(mergedFolder)}, mode:'copy-merge' });`);
+  const mergedList = await js(`return await window.board.boards.list();`);
+  const hasBothClashNames = mergedList.some((b) => b.name === 'Existing destination board')
+    && mergedList.some((b) => b.name === 'Storage copy source' && b.id !== storageSeed);
+  check('copy and keep both preserves destination boards and gives a name clash a new id',
+    merged.ok && hasBothClashNames,
+    `copy result ${JSON.stringify(merged)}; matching boards ${JSON.stringify(mergedList.filter((b) => /Storage copy source|Existing destination board/.test(b.name)))}`);
+
+  const emptySwitch = await js(`return await window.board.storage.apply({ path:${JSON.stringify(emptyFolder)}, mode:'empty' });`);
+  await fs.writeFile(path.join(emptyFolder, 'fallback-board.json'), JSON.stringify({
+    id: 'fallback-board', name: 'Most recent copied board', objects: [{ id: 'one' }], order: ['one']
+  }));
+  const stalePointerResume = await js(`return await window.board.boards.resume();`);
+  check('a pointer to a board outside the selected folder falls back to its newest non-empty board',
+    emptySwitch.ok && stalePointerResume.reason === 'newest' && stalePointerResume.board?.id === 'fallback-board',
+    `${stalePointerResume.reason} ${stalePointerResume.board?.id}`);
+
+  const nestedRejected = await js(`return await window.board.storage.apply({ path:${JSON.stringify(path.join(boardsDir, 'nested'))}, mode:'copy' });`);
+  const reset = await js(`return await window.board.storage.reset({ mode:'use-as-is' });`);
+  const keptOldFolder = await fs.readFile(path.join(emptyFolder, 'fallback-board.json'), 'utf8');
+  check('nested paths are rejected, reset returns to default, and old custom files remain',
+    !nestedRejected.ok && reset.ok && (await js(`return (await window.board.storage.get()).current;`)) === boardsDir
+      && keptOldFolder.includes('Most recent copied board'),
+    `nested: ${nestedRejected.error}; reset: ${JSON.stringify(reset)}`);
+  await fs.rm(storageRoot, { recursive: true, force: true });
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);

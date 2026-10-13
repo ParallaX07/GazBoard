@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "已儲存來自 {name} 的 {n} 個白板——在「我的白板」中",
  "From {name}": "來自 {name}",
  "Took back what came from {name}": "已復原來自 {name} 的內容",
- "Only the first {max} linked boards go along - send the others separately": "只會附帶前 {max} 個連結白板——其餘的請單獨傳送"
+ "Only the first {max} linked boards go along - send the others separately": "只會附帶前 {max} 個連結白板——其餘的請單獨傳送",
+ "Using default folder for this session": "本次使用預設資料夾",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "無法存取所選白板資料夾。請開啟設定變更位置。",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "無法存取所選白板資料夾。GazBoard 本次將使用預設資料夾。"
 }
