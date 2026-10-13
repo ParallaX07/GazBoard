@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "{n} quadros de {name} salvos - em Meus quadros",
  "From {name}": "De {name}",
  "Took back what came from {name}": "O que veio de {name} foi desfeito",
- "Only the first {max} linked boards go along - send the others separately": "Só os primeiros {max} quadros vinculados vão junto - envie os outros separadamente"
+ "Only the first {max} linked boards go along - send the others separately": "Só os primeiros {max} quadros vinculados vão junto - envie os outros separadamente",
+ "Using default folder for this session": "Usando a pasta padrão nesta sessão",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "A pasta de quadros escolhida está indisponível. Abra Configurações para alterá-la.",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "A pasta de quadros escolhida está indisponível. O GazBoard está usando a pasta padrão nesta sessão."
 }

@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "{name} থেকে {n}টি বোর্ড সেভ হলো - আমার বোর্ডে আছে",
  "From {name}": "{name} থেকে",
  "Took back what came from {name}": "{name} থেকে যা এসেছিল তা ফিরিয়ে নেওয়া হলো",
- "Only the first {max} linked boards go along - send the others separately": "শুধু প্রথম {max}টি লিংক করা বোর্ড সাথে যাবে - বাকিগুলো আলাদা করে পাঠান"
+ "Only the first {max} linked boards go along - send the others separately": "শুধু প্রথম {max}টি লিংক করা বোর্ড সাথে যাবে - বাকিগুলো আলাদা করে পাঠান",
+ "Using default folder for this session": "এই সেশনে ডিফল্ট ফোল্ডার ব্যবহার করা হচ্ছে",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "আপনার বেছে নেওয়া বোর্ডের ফোল্ডারটি পাওয়া যাচ্ছে না। এটি বদলাতে সেটিংস খুলুন।",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "বেছে নেওয়া বোর্ডের ফোল্ডারটি পাওয়া যাচ্ছে না। এই সেশনে GazBoard ডিফল্ট ফোল্ডার ব্যবহার করছে।"
 }

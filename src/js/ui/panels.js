@@ -1151,18 +1151,68 @@ export function createPanels(app) {
       };
 
       const info = h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' });
+      const storage = window.board?.storage ? h('div', {}) : null;
+      const drawStorage = async () => {
+        if (!storage) return;
+        const [i, state] = await Promise.all([window.board.info(), window.board.storage.get()]);
+        if (!storage.isConnected) return;
+        const path = i.boardsDir || state.current || (i.userData ? i.userData + '/boards' : '');
+        storage.replaceChildren(
+          i.storage?.status === 'fallback' ? h('div', { style: 'padding:8px 10px;margin-bottom:8px;border:1px solid rgba(255,185,0,.4);border-radius:6px;background:rgba(255,185,0,.12);font-size:12px;line-height:1.5' }, t('The chosen boards folder is unavailable. GazBoard is using the default folder for this session.')) : null,
+          h('code', { style: 'font-size:11px;display:block;word-break:break-all;margin-bottom:8px' }, path),
+          h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
+            h('button', { class: 'btn', onclick: async () => {
+              const picked = await window.board.storage.choose();
+              if (!picked?.ok) return;
+              const currentCount = ((await window.board.boards.list()) || []).length;
+              const mode = await app.choose(t('Change boards folder?'), picked.isEmpty
+                ? t('The selected folder is empty. Copy your {n} current boards there, or start empty?', { n: currentCount })
+                : t('The selected folder already has {n} boards. Use those as is, or copy your boards in while keeping both on a name clash?', { n: picked.existingBoards || 0 }),
+              picked.isEmpty
+                ? [{ id: 'copy', label: t('Copy my boards here'), primary: true }, { id: 'empty', label: t('Start empty') }]
+                : [{ id: 'use-as-is', label: t('Use as is'), primary: true }, { id: 'copy-merge', label: t('Copy and keep both') }]);
+              if (!mode) return;
+              const progress = app.showProgress(t('Changing boards folder'), t('Saving the open board and changing storage…'));
+              let result;
+              try { result = await window.board.storage.apply({ path: picked.path, mode }); }
+              finally { progress.close(); }
+              if (result?.ok) { app.toast(t('Boards folder changed')); await drawStorage(); }
+              else app.toast(result?.error || t('Could not change the boards folder'), 'help');
+            } }, t('Change folder…')),
+            h('button', { class: 'btn', onclick: async () => {
+              const destination = await window.board.storage.get();
+              if (!destination.isCustom) return;
+              const currentCount = ((await window.board.boards.list()) || []).length;
+              const mode = await app.choose(t('Reset boards folder?'), destination.defaultIsEmpty
+                ? t('The default folder is empty. Copy your {n} current boards there, or start empty?', { n: currentCount })
+                : t('The default folder already has {n} boards. Use those as is, or copy your boards in while keeping both on a name clash?', { n: destination.defaultExistingBoards || 0 }),
+              destination.defaultIsEmpty
+                ? [{ id: 'copy', label: t('Copy my boards here'), primary: true }, { id: 'empty', label: t('Start empty') }]
+                : [{ id: 'use-as-is', label: t('Use as is'), primary: true }, { id: 'copy-merge', label: t('Copy and keep both') }]);
+              if (!mode) return;
+              const progress = app.showProgress(t('Resetting boards folder'), t('Saving the open board and changing storage…'));
+              let result;
+              try { result = await window.board.storage.reset({ mode }); }
+              finally { progress.close(); }
+              if (result?.ok) { app.toast(t('Boards folder reset to default')); await drawStorage(); }
+              else app.toast(result?.error || t('Could not reset the boards folder'), 'help');
+            } }, t('Reset to default')),
+            h('button', { class: 'btn', onclick: () => window.board.openBoardsFolder?.() }, t('Open folder'))),
+          h('p', { style: 'font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:0' }, t('Tip: pick a folder inside Nextcloud, Dropbox or Syncthing to sync your boards. Use GazBoard on one computer at a time.')));
+      };
+      drawStorage().catch(() => {});
       window.board.info().then((i) => {
         const platformLines = i.electron
           ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
             t('Office conversion: <b>{how}</b>', { how: i.libreoffice ? t('LibreOffice detected') : t('built-in converter') }) + '<br>' +
             (i.sofficePath ? `<code style="font-size:11px">${i.sofficePath}</code><br>` : '') +
-            t('Boards folder: <code style="font-size:11px">{path}</code>', { path: i.userData })
+            t('Boards folder: <code style="font-size:11px">{path}</code>', { path: i.boardsDir || i.userData + '/boards' })
           : i.isAndroid
           ? `Android · WebView ${i.chrome}<br>` +
             t('Office conversion: <b>{how}</b>', { how: t('built-in converter') }) + '<br>' +
-            t('Boards storage: <code style="font-size:11px">{path}</code>', { path: i.userData })
+            t('Boards storage: <code style="font-size:11px">{path}</code>', { path: i.boardsDir || i.userData })
           : t('Runtime: <b>Web / Progressive Web App</b> · {mode}', { mode: i.pwa ? t('Standalone App') : t('Browser') }) + '<br>' +
-            t('Boards storage: <code style="font-size:11px">{path}</code>', { path: i.userData });
+            t('Boards storage: <code style="font-size:11px">{path}</code>', { path: i.boardsDir || i.userData });
 
         info.innerHTML = t('{app} · by {maker}', { app: `<b style="color:var(--text)">GazBoard ${i.version}</b>`, maker: '<b style="color:var(--accent)">theBoringCodes</b>' }) + '<br>' +
           `MD. Fakhruddin Gazzali · <a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
@@ -1234,6 +1284,7 @@ export function createPanels(app) {
             : null,
           row(t('Ruler snapping'), mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
+        storage ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), storage) : null,
         h('div', { class: 'section' },
           h('h5', {}, t('Canvas')),
           row(t('Mouse wheel zooms'), mkToggle(() => s.wheelZoom, (v) => (s.wheelZoom = v)), t('Off: wheel and trackpad pan, Ctrl+wheel zooms.')),
@@ -1586,10 +1637,10 @@ export function createPanels(app) {
           h('div', {}, all.length === 1
             ? t('{n} board, saved on this computer at:', { n: all.length })
             : t('{n} boards, saved on this computer at:', { n: all.length })),
-          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData + '/boards'),
+          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.boardsDir || i.userData + '/boards'),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => {
             if (window.board.openBoardsFolder) window.board.openBoardsFolder();
-            else window.board.showItem(i.userData + '/boards');
+            else window.board.showItem(i.boardsDir || i.userData + '/boards');
           } }, t('Open that folder')));
         main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
       } else if (i.isAndroid) {
@@ -1968,10 +2019,10 @@ export function createPanels(app) {
           h('div', {}, all.length === 1
             ? t('{n} board, saved on this computer at:', { n: all.length })
             : t('{n} boards, saved on this computer at:', { n: all.length })),
-          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData + '/boards'),
+          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.boardsDir || i.userData + '/boards'),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => {
             if (window.board.openBoardsFolder) window.board.openBoardsFolder();
-            else window.board.showItem(i.userData + '/boards');
+            else window.board.showItem(i.boardsDir || i.userData + '/boards');
           } }, t('Open that folder')));
         host.appendChild(foot);
       } else if (i.isAndroid) {
@@ -2165,5 +2216,5 @@ export function createPanels(app) {
 
   /** My boards, drawn again if it is up - boards and folders changed underneath it. */
   const boardsChanged = () => { if (currentKey === 'boards') boards({ stay: true }); };
-  return { templates, background, settings, sharing, boards, close, syncChanged, fontsChanged, boardsChanged, get open() { return !!currentKey; }, get page() { return currentKey === 'boards' && panel.classList.contains('page'); } };
+  return { templates, background, settings, sharing, boards, close, syncChanged, fontsChanged, boardsChanged, refreshStorage() { if (currentKey === 'settings') rerender(); else if (currentKey === 'boards') boards({ stay: true }); }, get open() { return !!currentKey; }, get page() { return currentKey === 'boards' && panel.classList.contains('page'); } };
 }

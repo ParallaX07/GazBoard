@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "Se guardaron {n} tableros de {name}, en Mis tableros",
  "From {name}": "De {name}",
  "Took back what came from {name}": "Se deshizo lo que llegó de {name}",
- "Only the first {max} linked boards go along - send the others separately": "Solo van los primeros {max} tableros enlazados: envía los demás por separado"
+ "Only the first {max} linked boards go along - send the others separately": "Solo van los primeros {max} tableros enlazados: envía los demás por separado",
+ "Using default folder for this session": "Se usa la carpeta predeterminada durante esta sesión",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "La carpeta de tableros elegida no está disponible. Abre Configuración para cambiarla.",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "La carpeta de tableros elegida no está disponible. GazBoard usará la carpeta predeterminada durante esta sesión."
 }

@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "已保存来自 {name} 的 {n} 个白板——在“我的白板”中",
  "From {name}": "来自 {name}",
  "Took back what came from {name}": "已撤销来自 {name} 的内容",
- "Only the first {max} linked boards go along - send the others separately": "只会附带前 {max} 个链接白板——其余的请单独发送"
+ "Only the first {max} linked boards go along - send the others separately": "只会附带前 {max} 个链接白板——其余的请单独发送",
+ "Using default folder for this session": "本次使用默认文件夹",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "无法访问所选白板文件夹。请打开设置更改位置。",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "无法访问所选白板文件夹。GazBoard 本次将使用默认文件夹。"
 }

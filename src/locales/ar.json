@@ -1076,5 +1076,8 @@
  "Saved {n} boards from {name} - in My boards": "حُفظت {n} لوحات من {name} - في لوحاتي",
  "From {name}": "من {name}",
  "Took back what came from {name}": "تم التراجع عمّا وصل من {name}",
- "Only the first {max} linked boards go along - send the others separately": "تذهب أول {max} لوحات مرتبطة فقط - أرسل البقية بشكل منفصل"
+ "Only the first {max} linked boards go along - send the others separately": "تذهب أول {max} لوحات مرتبطة فقط - أرسل البقية بشكل منفصل",
+ "Using default folder for this session": "استخدام المجلد الافتراضي لهذه الجلسة",
+ "Your chosen boards folder is unavailable. Open Settings to change it.": "مجلد اللوحات الذي اخترته غير متاح. افتح الإعدادات لتغييره.",
+ "The chosen boards folder is unavailable. GazBoard is using the default folder for this session.": "مجلد اللوحات المختار غير متاح. يستخدم GazBoard المجلد الافتراضي لهذه الجلسة."
 }
