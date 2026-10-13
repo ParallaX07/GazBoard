@@ -189,6 +189,7 @@ contextBridge.exposeInMainWorld('board', {
     choose: () => ipcRenderer.invoke('storage:choose'),
     apply: (opts) => ipcRenderer.invoke('storage:apply', opts),
     reset: (opts) => ipcRenderer.invoke('storage:reset', opts),
+    deleteOld: (token) => ipcRenderer.invoke('storage:delete-old', token),
     flushAck: (ticket, ok) => ipcRenderer.invoke('storage:flush-ack', ticket, ok),
     onFlush: (cb) => ipcRenderer.on('storage:flush', (_e, ticket) => cb(ticket)),
     onResume: (cb) => ipcRenderer.on('storage:resume', (_e, result) => cb(result)),

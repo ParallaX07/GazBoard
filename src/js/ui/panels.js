@@ -1152,6 +1152,8 @@ export function createPanels(app) {
 
       const info = h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' });
       const storage = window.board?.storage ? h('div', {}) : null;
+      let storageMessage = '', storageMessageIsError = false;
+      let storageDeleteToken = null;
       const drawStorage = async () => {
         if (!storage) return;
         const [i, state] = await Promise.all([window.board.info(), window.board.storage.get()]);
@@ -1163,7 +1165,12 @@ export function createPanels(app) {
           h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
             h('button', { class: 'btn', onclick: async () => {
               const picked = await window.board.storage.choose();
-              if (!picked?.ok) return;
+              if (!picked?.ok) {
+                const reason = picked?.reason || picked?.error;
+                if (reason) { storageMessage = `${t('Could not change the boards folder')}: ${reason}`; storageMessageIsError = true; await drawStorage(); }
+                return;
+              }
+              if (picked.unchanged) return;
               const currentCount = ((await window.board.boards.list()) || []).length;
               const mode = await app.choose(t('Change boards folder?'), picked.isEmpty
                 ? t('The selected folder is empty. Copy your {n} current boards there, or start empty?', { n: currentCount })
@@ -1175,9 +1182,12 @@ export function createPanels(app) {
               const progress = app.showProgress(t('Changing boards folder'), t('Saving the open board and changing storage…'));
               let result;
               try { result = await window.board.storage.apply({ path: picked.path, mode }); }
+              catch (error) { result = { ok: false, error: error.message || String(error) }; }
               finally { progress.close(); }
-              if (result?.ok) { app.toast(t('Boards folder changed')); await drawStorage(); }
-              else app.toast(result?.error || t('Could not change the boards folder'), 'help');
+              storageMessageIsError = !result?.ok;
+              storageMessage = result?.ok ? t('Boards folder changed') : `${t('Could not change the boards folder')}: ${result?.error || ''}`;
+              storageDeleteToken = result?.deleteToken || null;
+              await drawStorage();
             } }, t('Change folder…')),
             h('button', { class: 'btn', onclick: async () => {
               const destination = await window.board.storage.get();
@@ -1193,12 +1203,24 @@ export function createPanels(app) {
               const progress = app.showProgress(t('Resetting boards folder'), t('Saving the open board and changing storage…'));
               let result;
               try { result = await window.board.storage.reset({ mode }); }
+              catch (error) { result = { ok: false, error: error.message || String(error) }; }
               finally { progress.close(); }
-              if (result?.ok) { app.toast(t('Boards folder reset to default')); await drawStorage(); }
-              else app.toast(result?.error || t('Could not reset the boards folder'), 'help');
+              storageMessageIsError = !result?.ok;
+              storageMessage = result?.ok ? t('Boards folder reset to default') : `${t('Could not reset the boards folder')}: ${result?.error || ''}`;
+              storageDeleteToken = result?.deleteToken || null;
+              await drawStorage();
             } }, t('Reset to default')),
             h('button', { class: 'btn', onclick: () => window.board.openBoardsFolder?.() }, t('Open folder'))),
+          storageDeleteToken ? h('button', { class: 'btn', style: 'margin-top:8px', onclick: async () => {
+            const result = await window.board.storage.deleteOld(storageDeleteToken);
+            if (result?.ok) { storageDeleteToken = null; storageMessage = t('Old copies moved to Trash'); storageMessageIsError = false; }
+            else if (!result?.canceled) { storageMessage = `${t('Could not remove old copies')}: ${result?.error || ''}`; storageMessageIsError = true; }
+            await drawStorage();
+          } }, t('Move old copies to Trash…')) : null,
           h('p', { style: 'font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:0' }, t('Tip: pick a folder inside Nextcloud, Dropbox or Syncthing to sync your boards. Use GazBoard on one computer at a time.')));
+        if (storageMessage) storage.append(h('div', {
+          role: 'status', style: `font-size:12px;margin-top:8px;color:${storageMessageIsError ? 'var(--danger,#c50f1f)' : 'var(--text-2)'}`
+        }, storageMessage));
       };
       drawStorage().catch(() => {});
       window.board.info().then((i) => {

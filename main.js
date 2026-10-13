@@ -164,13 +164,36 @@ function registerProtocol() {
  *  Board storage (local only - no accounts, no cloud)
  * ------------------------------------------------------------------ */
 const defaultDataDir = () => StorageLocation.defaultBoardsDir(app.getPath('userData'));
-const storedStorageLocation = StorageLocation.readConfig(app.getPath('userData'));
+let storedStorageLocation = StorageLocation.readConfig(app.getPath('userData'));
 let activeDataDir = storedStorageLocation?.boardsDir || null;
 let storageFallback = false;
 let storageSwitching = false;
+let storageWriteGate = null;
+let storageWriteCount = 0;
+let storageWriteIdle = [];
 const storageFlushes = new Map();
+const deletableStorageCopies = new Map();
 const dataDir = () => activeDataDir || defaultDataDir();
 async function ensureDataDir() { await fsp.mkdir(dataDir(), { recursive: true }); }
+
+async function withStorageWrite(write) {
+  while (storageWriteGate) await storageWriteGate;
+  storageWriteCount++;
+  try { return await write(); }
+  finally {
+    if (--storageWriteCount === 0) {
+      for (const resolve of storageWriteIdle) resolve();
+      storageWriteIdle = [];
+    }
+  }
+}
+
+async function pauseStorageWrites() {
+  let resume;
+  storageWriteGate = new Promise((resolve) => { resume = resolve; });
+  if (storageWriteCount) await new Promise((resolve) => storageWriteIdle.push(resolve));
+  return () => { storageWriteGate = null; resume(); };
+}
 
 // Which board was open last. This used to live in the renderer's localStorage,
 // which Chromium flushes to disk lazily - so a machine that was restarted rather
@@ -243,7 +266,7 @@ function storageInfo() {
       .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json')).length;
   } catch {}
   return {
-    current: dataDir(), default: defaultDataDir(), isCustom: !!activeDataDir,
+    current: dataDir(), default: defaultDataDir(), isCustom: !!storedStorageLocation,
     status: storageFallback ? 'fallback' : 'ok',
     defaultExistingBoards, defaultIsEmpty: defaultExistingBoards === 0
   };
@@ -280,9 +303,11 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
   }
   let copied = 0, skipped = 0;
   const verify = [];
+  const sourceBoards = [];
   for (const entry of sourceFiles) {
     const source = path.join(fromBoards, entry.name);
     const raw = await fsp.readFile(source);
+    sourceBoards.push({ name: entry.name, size: raw.length, hash: crypto.createHash('sha256').update(raw).digest('hex') });
     const original = JSON.parse(raw.toString('utf8'));
     let id = String(original.id || path.basename(entry.name, '.json'));
     if (remap.has(id)) id = remap.get(id);
@@ -303,18 +328,30 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
     copied++;
   }
   const sourceAssets = activeDataDir ? assetsDir() : path.join(app.getPath('userData'), 'assets');
-  const destAssets = path.join(toBoards, 'assets');
+  const destAssets = path.resolve(toBoards) === path.resolve(defaultDataDir())
+    ? path.join(app.getPath('userData'), 'assets') : path.join(toBoards, 'assets');
   let assetsCopied = 0;
+  let assetsSeen = 0;
+  const verifyAssets = [];
+  const sourceAssetFiles = [];
   try {
     for (const entry of await fsp.readdir(sourceAssets, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
+      assetsSeen++;
       await fsp.mkdir(destAssets, { recursive: true });
       const src = path.join(sourceAssets, entry.name), dest = path.join(destAssets, entry.name);
-      try { await fsp.copyFile(src, dest, fs.constants.COPYFILE_EXCL); assetsCopied++; }
+      const sourceBytes = await fsp.readFile(src);
+      sourceAssetFiles.push({ name: entry.name, size: sourceBytes.length, hash: crypto.createHash('sha256').update(sourceBytes).digest('hex') });
+      try {
+        await fsp.copyFile(src, dest, fs.constants.COPYFILE_EXCL);
+        verifyAssets.push({ file: dest, size: sourceBytes.length });
+        assetsCopied++;
+      }
       catch (e) {
         if (e.code !== 'EEXIST') throw e;
-        const [a, b] = await Promise.all([fsp.readFile(src), fsp.readFile(dest)]);
-        if (!a.equals(b)) throw new Error(`An asset named ${entry.name} already exists with different contents.`);
+        const existing = await fsp.readFile(dest);
+        if (!sourceBytes.equals(existing)) throw new Error(`An asset named ${entry.name} already exists with different contents.`);
+        verifyAssets.push({ file: dest, size: sourceBytes.length });
       }
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -322,7 +359,43 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
     const st = await fsp.stat(item.file);
     if (st.size !== item.size) throw new Error(`Could not verify copied board ${path.basename(item.file)}.`);
   }
-  return { copied, skipped, assetsCopied };
+  if (verify.length !== sourceFiles.length) throw new Error('Could not verify every copied board.');
+  if (verifyAssets.length !== assetsSeen) throw new Error('Could not verify every copied asset.');
+  for (const item of verifyAssets) {
+    const st = await fsp.stat(item.file);
+    if (st.size !== item.size) throw new Error(`Could not verify copied asset ${path.basename(item.file)}.`);
+  }
+  return { copied, skipped, assetsCopied, sourceBoards, sourceAssetFiles, sourceAssets };
+}
+
+async function trashOldStorageCopies(token) {
+  const old = deletableStorageCopies.get(token);
+  if (!old) return { ok: false, error: 'These old copies are no longer available to remove.' };
+  if (path.resolve(old.boardsDir) === path.resolve(dataDir()))
+    return { ok: false, error: 'The old folder is now active. Its boards were kept.' };
+  const choice = await dialog.showMessageBox(mainWindow, {
+    type: 'warning', title: 'Remove the old board copies?',
+    message: 'The new folder has been verified. Move the old board copies and assets to the Trash?',
+    detail: old.boardsDir,
+    buttons: ['Keep old copies', 'Move old copies to Trash'], defaultId: 0, cancelId: 0, noLink: true
+  });
+  if (choice.response !== 1) return { ok: false, canceled: true };
+  const files = [
+    ...old.sourceBoards.map((f) => ({ ...f, path: path.join(old.boardsDir, f.name) })),
+    ...old.sourceAssetFiles.map((f) => ({ ...f, path: path.join(old.sourceAssets, f.name) }))
+  ];
+  const existing = [];
+  for (const file of files) {
+    let bytes;
+    try { bytes = await fsp.readFile(file.path); }
+    catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+    if (bytes.length !== file.size || crypto.createHash('sha256').update(bytes).digest('hex') !== file.hash)
+      return { ok: false, error: 'An old board or asset changed after the copy. Nothing was moved to the Trash.' };
+    existing.push(file.path);
+  }
+  for (const file of existing) await shell.trashItem(file);
+  deletableStorageCopies.delete(token);
+  return { ok: true, deleted: existing.length };
 }
 
 async function applyStorageLocation(target, mode, reset = false) {
@@ -337,6 +410,7 @@ async function applyStorageLocation(target, mode, reset = false) {
   if (!['copy', 'use-as-is', 'copy-merge', 'empty'].includes(mode)) return { ok: false, error: 'Choose how to use the folder.' };
   storageSwitching = true;
   let switched = false;
+  let resumeWrites = null;
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const ticket = `storage-flush:${Date.now()}:${Math.random()}`;
@@ -347,7 +421,9 @@ async function applyStorageLocation(target, mode, reset = false) {
       });
       if (!await flushed) throw new Error('GazBoard could not finish saving the open board. Try again.');
     }
+    resumeWrites = await pauseStorageWrites();
     let result = { copied: 0, skipped: 0, assetsCopied: 0 };
+    const originalDir = dataDir();
     if ((mode === 'copy' || mode === 'copy-merge') && path.resolve(dataDir()) !== path.resolve(checked.path)) {
       await fsp.mkdir(checked.path, { recursive: true });
       result = await copyStorageContents(dataDir(), checked.path, { merge: mode === 'copy-merge' });
@@ -355,18 +431,30 @@ async function applyStorageLocation(target, mode, reset = false) {
     if (reset) {
       try { fs.unlinkSync(StorageLocation.configFile(app.getPath('userData'))); }
       catch (e) { if (e.code !== 'ENOENT') throw e; }
+      storedStorageLocation = null;
       activeDataDir = null;
     } else {
       StorageLocation.writeConfig(app.getPath('userData'), checked.path);
+      storedStorageLocation = { version: 1, boardsDir: checked.path };
       activeDataDir = checked.path;
     }
     storageFallback = false;
     switched = true;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('storage:changed');
-    return { ok: true, ...result };
+    let deleteToken;
+    if (result.sourceBoards?.length || result.sourceAssetFiles?.length) {
+      deleteToken = crypto.randomUUID();
+      deletableStorageCopies.set(deleteToken, {
+        boardsDir: originalDir, sourceBoards: result.sourceBoards,
+        sourceAssets: result.sourceAssets, sourceAssetFiles: result.sourceAssetFiles
+      });
+    }
+    const { sourceBoards, sourceAssetFiles, sourceAssets, ...summary } = result;
+    return { ok: true, ...summary, deleteToken };
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   } finally {
+    resumeWrites?.();
     storageSwitching = false;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('storage:resume', { ok: switched });
   }
@@ -905,6 +993,7 @@ function ipc() {
     applyStorageLocation(opts.path, opts.mode));
   ipcMain.handle('storage:reset', async (_e, opts = {}) =>
     applyStorageLocation(defaultDataDir(), opts.mode, true));
+  ipcMain.handle('storage:delete-old', async (_e, token) => trashOldStorageCopies(token));
   ipcMain.handle('storage:flush-ack', (_e, ticket, ok = true) => {
     const finish = storageFlushes.get(ticket);
     if (!finish) return false;
@@ -1044,7 +1133,7 @@ function ipc() {
     await ensureDataDir();
     try { return JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8')); } catch { return null; }
   });
-  ipcMain.handle('boards:save', async (_e, payload) => {
+  ipcMain.handle('boards:save', async (_e, payload) => withStorageWrite(async () => {
     await ensureDataDir();
     // The renderer sends { id, json }. An older shape - the board object itself -
     // is still accepted so nothing breaks if the two sides are ever out of step.
@@ -1070,13 +1159,13 @@ function ipc() {
       moveLast ? setLastBoard(board.id) : Promise.resolve()
     ]);
     return true;
-  });
+  }));
   /**
    * Store one picture and return the name the board should remember. Returns
    * null if it cannot - the caller then keeps the picture inline, exactly as
    * before, so a failure here can never lose an image.
    */
-  ipcMain.handle('assets:put', async (_e, dataUrl) => {
+  ipcMain.handle('assets:put', async (_e, dataUrl) => withStorageWrite(async () => {
     try {
       const d = decodeDataUrl(dataUrl);
       if (!d || !d.buf.length) return null;
@@ -1089,7 +1178,7 @@ function ipc() {
       await writeAtomic(file, d.buf);
       return { id };
     } catch { return null; }
-  });
+  }));
 
   /** Read one picture back as a data: URL. Null when it is not there. */
   ipcMain.handle('assets:get', async (_e, id) => {
@@ -1337,7 +1426,8 @@ async function prepareConfiguredStorage() {
       currentDir: null, protectedDir: defaultDataDir(), appPath: app.getAppPath(), create: false
     });
     if (check.ok) return;
-    const choice = await dialog.showMessageBox({
+    const choice = process.argv.includes('--smoke') && process.env.GAZBOARD_TEST_STORAGE_FALLBACK === 'default'
+      ? { response: 1 } : await dialog.showMessageBox({
       type: 'warning', title: 'GazBoard storage folder unavailable',
       message: 'GazBoard could not use your saved boards folder.',
       detail: `${activeDataDir}\n\n${check.reason}\n\nYour saved folder setting has not been changed.`,
@@ -1351,7 +1441,7 @@ async function prepareConfiguredStorage() {
     });
     if (picked.canceled || !picked.filePaths[0]) continue;
     const valid = StorageLocation.validateBoardsDir(picked.filePaths[0], {
-      currentDir: activeDataDir, appPath: app.getAppPath()
+      currentDir: activeDataDir, protectedDir: defaultDataDir(), appPath: app.getAppPath()
     });
     if (!valid.ok) {
       await dialog.showMessageBox({ type: 'error', title: 'Cannot use this folder', message: valid.reason, buttons: ['OK'] });

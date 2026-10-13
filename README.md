@@ -400,7 +400,7 @@ pnpm run test:restart     # kills the app mid-session and checks the board comes
 pnpm run test:storage     # storage path config and validation
 ```
 
-as of 02-Sep-2026, the smoke suite has 368 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
+as of 13-Oct-2026, the smoke suite has 1190 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
 pan-while-drawing and edge auto-pan, shape recognition, notes/text/shapes/tables, undo/redo,
 transforms, hit testing, the pen tray, click-away deselect, the zoom readout, the handwriting
 font, the pen-nib cursor, the About plate, the handwriting default and its settings migration,
