@@ -59,6 +59,7 @@
     "productName": "GazBoard",
     "files": [
       "main.js",
+      "storage-location.js",
       "preload.js",
       "soffice.js",
       "msoffice.js",
