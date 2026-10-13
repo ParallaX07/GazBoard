@@ -44,11 +44,11 @@ JS
 
 echo "launch 1 - make a board, then kill the process"
 GAZBOARD_USER_DATA="$PROFILE" GAZBOARD_TEST=/tmp/gb-restart-1.js \
-  xvfb-run -a npx electron . --smoke --no-sandbox 2>/dev/null | grep '^CREATED' || true
+  xvfb-run -a pnpm exec electron . --smoke --no-sandbox 2>/dev/null | grep '^CREATED' || true
 
 echo "launch 2 - it must come back"
 RESULT=$(GAZBOARD_USER_DATA="$PROFILE" GAZBOARD_TEST=/tmp/gb-restart-2.js \
-  xvfb-run -a npx electron . --smoke --no-sandbox 2>/dev/null | grep '^REOPENED' || true)
+  xvfb-run -a pnpm exec electron . --smoke --no-sandbox 2>/dev/null | grep '^REOPENED' || true)
 echo "$RESULT"
 
 echo "$RESULT" | grep -q '"name":"Work in progress"' || { echo "FAIL: the board did not come back"; exit 1; }

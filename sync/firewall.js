@@ -307,7 +307,7 @@ function fields(text) {
  *
  * process.execPath inside a bundle is .../GazBoard.app/Contents/MacOS/GazBoard,
  * and socketfilterfw is happier with the bundle above it. Outside a bundle -
- * `npm start`, a CI run - there is nothing to strip and the binary is the
+ * `pnpm start`, a CI run - there is nothing to strip and the binary is the
  * right answer anyway.
  */
 function macAppPath(exe) {

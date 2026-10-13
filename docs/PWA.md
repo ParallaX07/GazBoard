@@ -55,25 +55,25 @@ The application's core logic communicates with the platform via the unified `win
 ### Running Electron
 ```bash
 # Start Electron in development
-npm start
+pnpm start
 
 # Run Electron with devtools open
-npm run dev
+pnpm run dev
 
 # Run Electron smoke tests headlessly
-npm run smoke:builtin
+pnpm run smoke:builtin
 ```
 
 ### Running Web / PWA
 ```bash
 # Start local PWA development server (http://localhost:8080)
-npm run serve:web
+pnpm run serve:web
 
 # Build production static web distribution into dist-web/
-npm run build:web
+pnpm run build:web
 
 # Run Web/PWA automated tests
-npm run test:web
+pnpm run test:web
 ```
 
 ---
@@ -85,7 +85,7 @@ The web build in `dist-web/` consists entirely of static HTML, CSS, JavaScript, 
 ### Cloudflare Pages / Vercel / Netlify / GitHub Pages
 1. Build the production distribution:
    ```bash
-   npm run build:web
+   pnpm run build:web
    ```
 2. Deploy the `dist-web/` directory as the static publish root.
 3. Ensure HTTPS is enabled (required by browsers for Service Worker registration).

@@ -859,7 +859,7 @@ async function run() {
   /* ---------------- what actually ends up in the installer ----------------
    *
    * electron-builder's `files` is a WHITELIST, not an ignore list. Anything not
-   * named in it is simply absent from app.asar - and because `npm start` runs
+   * named in it is simply absent from app.asar - and because `pnpm start` runs
    * from the repo, where every file is present, the gap is invisible until
    * somebody installs the built app on another machine and it dies with
    * "Cannot find module". Which is exactly what happened to sync/: the whole

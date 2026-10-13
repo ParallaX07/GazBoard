@@ -8,7 +8,7 @@ Unzip over your GazBoard folder — everything is a new file, nothing is replace
 ## What each machine needs
 
 **Node, and nothing else.** The sync code uses only what Node ships with, so
-there is no `npm install` for any of this — not even on the machine you unzip
+there is no `pnpm install` for any of this — not even on the machine you unzip
 into.
 
 The second machine does not need the repository at all. In the zip there is:
@@ -25,10 +25,10 @@ folder:
 
 **On the machine that has the repository, do not use that file.** It sits in a
 `dist-sync` subfolder, so `node gazboard-sync.js` from the repo root will fail
-with `Cannot find module`. Use the npm commands instead:
+with `Cannot find module`. Use the pnpm commands instead:
 
-    npm run sync:receive
-    npm run sync:send 192.168.0.14 7MPU-K7TM
+    pnpm run sync:receive
+    pnpm run sync:send 192.168.0.14 7MPU-K7TM
 
 or point at the file properly, if you prefer:
 
@@ -45,16 +45,16 @@ prints it, along with the code, the moment you start it.
 Copy those two straight into the send command on the other machine. No port
 number — the transfer always uses the same one.
 
-The `npm run sync:*` commands below are the same thing from inside the repo.
+The `pnpm run sync:*` commands below are the same thing from inside the repo.
 Use whichever suits the machine you are on. If you change the sync code later,
-rebuild that single file with `npm run build:sync-demo`.
+rebuild that single file with `pnpm run build:sync-demo`.
 
 ---
 
 ## 1. The quick one: does the engine work at all
 
 ```bash
-npm run test:sync
+pnpm run test:sync
 ```
 
 Two GazBoards start inside one test run, pretending to be two machines, and pair
@@ -71,9 +71,9 @@ standing at — they do exactly the same thing.
 
 | On the machine with the repository | On a machine with only the one file |
 |---|---|
-| `npm run sync:receive` | `node gazboard-sync.js receive` |
-| `npm run sync:send <address> <code>` | `node gazboard-sync.js send <address> <code>` |
-| `npm run sync:discover` | `node gazboard-sync.js discover` |
+| `pnpm run sync:receive` | `node gazboard-sync.js receive` |
+| `pnpm run sync:send <address> <code>` | `node gazboard-sync.js send <address> <code>` |
+| `pnpm run sync:discover` | `node gazboard-sync.js discover` |
 
 The steps below show the repository form. If the machine you are on only has
 `gazboard-sync.js`, swap in the right-hand column.
@@ -85,13 +85,13 @@ The steps below show the repository form. If the machine you are on only has
 On **one** computer:
 
 ```bash
-npm run sync:discover          # or: node gazboard-sync.js discover
+pnpm run sync:discover          # or: node gazboard-sync.js discover
 ```
 
 On the **other** computer, same wifi:
 
 ```bash
-npm run sync:receive           # or: node gazboard-sync.js receive
+pnpm run sync:receive           # or: node gazboard-sync.js receive
 ```
 
 Within a few seconds the first terminal should list the second by name.
@@ -109,7 +109,7 @@ at home is the more likely place for it to fail.
 On the **receiving** computer:
 
 ```bash
-npm run sync:receive           # or: node gazboard-sync.js receive
+pnpm run sync:receive           # or: node gazboard-sync.js receive
 ```
 
 It prints something like:
@@ -127,7 +127,7 @@ It prints something like:
 On the **sending** computer, using that address and code:
 
 ```bash
-npm run sync:send 192.168.0.14 7MPU-K7TM
+pnpm run sync:send 192.168.0.14 7MPU-K7TM
 # or: node gazboard-sync.js send 192.168.0.14 7MPU-K7TM
 ```
 
@@ -152,7 +152,7 @@ declined.
 ### Sending one of your own boards
 
 ```bash
-npm run sync:send 192.168.0.14 7MPU-K7TM "C:\Users\User\Downloads\Lesson plan.gazboard"
+pnpm run sync:send 192.168.0.14 7MPU-K7TM "C:\Users\User\Downloads\Lesson plan.gazboard"
 # or: node gazboard-sync.js send 192.168.0.14 7MPU-K7TM "C:\...\Lesson plan.gazboard"
 ```
 
@@ -163,7 +163,7 @@ npm run sync:send 192.168.0.14 7MPU-K7TM "C:\Users\User\Downloads\Lesson plan.ga
 **A wrong code.** Type the code wrong on the sender. It should refuse and say
 how many attempts are left, and nothing should pair.
 
-**Someone else's machine.** Run `npm run sync:send` against the receiver
+**Someone else's machine.** Run `pnpm run sync:send` against the receiver
 *without* a valid code — it cannot get in. Only a paired device may send.
 
 **A classroom.** Leave one receiver running and pair from two different senders
@@ -171,7 +171,7 @@ with the same code. Both should work: the code is a session, not a one-shot.
 
 **Forgetting.** Ctrl+C the receiver and start it again. The old pairing is gone,
 so the sender has to pair afresh — that is "just for this session" working.
-Start it with `npm run sync:receive -- --remember` (or
+Start it with `pnpm run sync:receive -- --remember` (or
 `node gazboard-sync.js receive --remember`) and the pairing would be kept
 instead, which is what your own two computers would use.
 
@@ -221,7 +221,7 @@ is TCP — the two are allowed separately.
 Check the address you typed.
 
 **`Cannot find module ...gazboard-sync.js`** — you are on the machine with the
-repository, and that file lives in `dist-sync`. Use `npm run sync:send` there.
+repository, and that file lives in `dist-sync`. Use `pnpm run sync:send` there.
 
 **"no pairing in progress"** — the code you typed has expired. Codes last five
 minutes. The receiving terminal prints a fresh one automatically when the old

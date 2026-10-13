@@ -84,18 +84,18 @@ xattr -dr com.apple.quarantine /Applications/GazBoard.app
 ## Running it
 
 ```bash
-npm install      # pulls Electron (~200 MB) — the app's own libraries are already vendored
-npm start
+pnpm install      # pulls Electron (~200 MB) — the app's own libraries are already vendored
+pnpm start
 ```
 
-Development mode with DevTools: `npm run dev`
+Development mode with DevTools: `pnpm run dev`
 
 ### Building installers
 
 ```bash
-npm run dist:win     # NSIS installer + portable .exe
-npm run dist:mac     # .dmg + .zip
-npm run dist:linux   # AppImage + .deb
+pnpm run dist:win     # NSIS installer + portable .exe
+pnpm run dist:mac     # .dmg + .zip
+pnpm run dist:linux   # AppImage + .deb
 ```
 
 Installers land in `dist/`. Build on the target OS (or use a CI matrix) — electron-builder
@@ -381,9 +381,9 @@ edits, replays the log into a fresh `Store` and checks the two documents match.
 ## Tests
 
 ```bash
-npm run smoke            # headless, uses LibreOffice if present
-npm run smoke:builtin    # forces the built-in Office converter
-npm run test:restart     # kills the app mid-session and checks the board comes back
+pnpm run smoke            # headless, uses LibreOffice if present
+pnpm run smoke:builtin    # forces the built-in Office converter
+pnpm run test:restart     # kills the app mid-session and checks the board comes back
 ```
 
 as of 02-Sep-2026, 368 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,

@@ -1,6 +1,6 @@
 'use strict';
 // Headless smoke test: drives the real renderer through every subsystem and
-// writes screenshots to test/out/. Run with:  npm run smoke
+// writes screenshots to test/out/. Run with:  pnpm run smoke
 const path = require('node:path');
 const fs = require('node:fs/promises');
 
@@ -2678,7 +2678,7 @@ async function run(win, app) {
   check('and close up, off-screen ink is culled before drawing',
     bigBoard.nearCalls > 0 && bigBoard.nearCalls < bigBoard.outCalls && bigBoard.awayCalls === 0,
     `${bigBoard.nearCalls} calls at 100%, ${bigBoard.awayCalls} away from the board; ${bigBoard.near.toFixed(1)} ms per frame at 100%`);
-  // Optional hardware benchmark: npm run smoke -- --strict-performance
+  // Optional hardware benchmark: pnpm run smoke -- --strict-performance
   // Normal smoke runs defend draw cost, just like the handwriting checks below.
   if (process.argv.includes('--strict-performance')) {
     check('a 2688-object board redraws within the strict 16ms budget at 12%',
@@ -11847,7 +11847,7 @@ module.exports.run = async (win, app) => {
     `${pasted.usedNativeClipboard ? 'straight to the machine clipboard (no focus needed)' : 'through the browser clipboard API, which needs the window in front'}` +
     (pasted.windowLostFocus
       ? ` — THE WINDOW WAS IN THE BACKGROUND and the browser refused. This build has no test hook; run the ` +
-        `suite from the repo with npm run test:all instead of pasting it into a normal window.`
+        `suite from the repo with pnpm run test:all instead of pasting it into a normal window.`
       : ` — anything less means the checks below were racing the operating system rather than testing the board`));
   check('copying objects leaves the machine clipboard alone',
     pasted.copiedCount === 2 && pasted.clipboardUndisturbed === true,
@@ -12746,7 +12746,7 @@ module.exports.run = async (win, app) => {
    * the only correct answer is "not my department".
    *
    * The program path is reported either way, because it is the thing that
-   * explains a surprising verdict: `npm start` runs electron.exe out of
+   * explains a surprising verdict: `pnpm start` runs electron.exe out of
    * node_modules, and a rule somebody added for the INSTALLED GazBoard.exe -
    * or for node.exe while testing - says nothing about that one. Two different
    * programs, two different rules, and the path is how you tell.
@@ -14676,7 +14676,7 @@ module.exports.run = async (win, app) => {
 
     const off = resolveSoffice({ ...WIN, env: { GAZBOARD_DISABLE_LIBREOFFICE: '1' }, exists: machine(onC) });
     check('the suite can still switch it off on a machine that has it',
-      off === null, `got ${off} — npm run smoke:builtin exercises the built-in converter, which needs this`);
+      off === null, `got ${off} — pnpm run smoke:builtin exercises the built-in converter, which needs this`);
 
     /*
      * A letter that is not there must cost one question, not four. On an

@@ -4,13 +4,13 @@
  *
  * The suite needs a display. Linux build machines have none, so it is wrapped
  * in xvfb-run there - but xvfb-run is a Linux program, so hard-coding it into
- * the npm script made `npm test` fail on Windows and macOS, where there is a
+ * the pnpm script made `pnpm test` fail on Windows and macOS, where there is a
  * display already and nothing to wrap. Contributors then had to know which of
  * several near-identical scripts was the one for their OS, which is not
  * something anyone should have to know.
  *
  * Each branch below is the exact command that platform is known to pass with.
- * Extra arguments are passed straight through:  npm test -- --headless
+ * Extra arguments are passed straight through:  pnpm test -- --headless
  */
 'use strict';
 const { spawnSync } = require('node:child_process');

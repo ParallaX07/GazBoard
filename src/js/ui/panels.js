@@ -552,7 +552,7 @@ export function createPanels(app) {
    *
    * A firewall rule names one executable, and there are easily three of them in
    * play: the installed GazBoard.exe, the portable one, and the electron.exe
-   * under node_modules that `npm start` runs. Permission given to one says
+   * under node_modules that `pnpm start` runs. Permission given to one says
    * nothing about the others, and without this line a green banner on one and
    * an amber banner on another looks like a bug rather than the plain truth
    * about two different programs.

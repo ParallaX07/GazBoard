@@ -126,7 +126,7 @@ async function build() {
   console.log(`- Files: ${fileCount}`);
   console.log(`- Total Size: ${(totalBytes / (1024 * 1024)).toFixed(2)} MB`);
   console.log(`- PWA Version: ${version}`);
-  console.log(`\nTo test locally, run: npm run serve:web`);
+  console.log(`\nTo test locally, run: pnpm run serve:web`);
 }
 
 build().catch((err) => {
