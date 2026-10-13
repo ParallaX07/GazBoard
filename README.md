@@ -246,7 +246,8 @@ By default, boards live in `<userData>/boards` — on Windows that is
 `%APPDATA%\GazBoard\boards`, on Linux `~/.config/GazBoard/boards`. In the desktop app,
 open **Settings → Storage → Change folder** to save them in another folder, including a
 Nextcloud, Syncthing or Dropbox folder. GazBoard copies boards there and leaves the originals
-in place; images and imported pages are kept alongside them in an `assets` subfolder.
+in place unless you later choose **Move old copies to Trash**; images and imported pages
+are kept alongside them in an `assets` subfolder.
 **Uninstalling does not remove the default boards**, so reinstalling picks them up if the
 profile remains. A custom folder is outside GazBoard's profile and is left where you put it.
 The Boards panel shows the active folder and can open it.
@@ -400,7 +401,7 @@ pnpm run test:restart     # kills the app mid-session and checks the board comes
 pnpm run test:storage     # storage path config and validation
 ```
 
-as of 13-Oct-2026, the smoke suite has 1190 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
+as of 13-Oct-2026, the smoke suite has 1191 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
 pan-while-drawing and edge auto-pan, shape recognition, notes/text/shapes/tables, undo/redo,
 transforms, hit testing, the pen tray, click-away deselect, the zoom readout, the handwriting
 font, the pen-nib cursor, the About plate, the handwriting default and its settings migration,
